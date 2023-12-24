@@ -1,0 +1,2 @@
+[patch.crates-io]
+ratatui = { path = "/home/janv/Documents/Projects/ratatui" }
