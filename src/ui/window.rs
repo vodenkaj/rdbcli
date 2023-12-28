@@ -24,7 +24,7 @@ pub struct WindowRenderInfo {
 
 pub struct WindowBuilder {
     components: Vec<Arc<Mutex<dyn Component>>>,
-    keybinds: HashMap<String, Box<dyn Fn(&mut Window) + Send + Sync>>,
+    keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Window) + Send + Sync>>,
 }
 
 #[async_trait]
@@ -33,9 +33,9 @@ impl EventHandler for Window {
         if let EventValue::OnInput(value) = &event.value {
             match value.key.code {
                 event::KeyCode::Char(ch) => {
-                    if let Some(handler) = self.keybinds.remove(&ch.to_string()) {
+                    if let Some(handler) = self.keybinds.remove(&value.key.code) {
                         handler(self);
-                        self.keybinds.insert(ch.to_string(), handler);
+                        self.keybinds.insert(value.key.code, handler);
                     }
                 }
                 _ => {}
@@ -77,11 +77,11 @@ pub struct Window {
     pub event_manager: Arc<Mutex<EventManager>>,
     components: Vec<Arc<Mutex<dyn Component>>>,
     pub focused_component_idx: usize,
-    keybinds: HashMap<String, Box<dyn Fn(&mut Self) + Send + Sync>>,
+    keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Self) + Send + Sync>>,
 }
 
 impl Window {
-    pub fn with_keybind(&mut self, bind: String, action: Box<dyn Fn(&mut Self) + Send + Sync>) {
+    pub fn with_keybind(&mut self, bind: event::KeyCode, action: Box<dyn Fn(&mut Self) + Send + Sync>) {
         self.keybinds.insert(bind, action);
     }
 
@@ -132,8 +132,7 @@ impl Window {
             .trigger_event_sync(Event {
                 component_id: self.focused_component_idx,
                 value: EventValue::OnInput(info),
-            })
-            .await;
+            });
         Ok(())
     }
 

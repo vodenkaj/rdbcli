@@ -3,10 +3,11 @@ use super::{
     connection::ConnectionInfo,
 };
 use crate::{
-    managers::connection_manager::ConnectionEvent,
+    managers::{connection_manager::ConnectionEvent, window_manager::WindowCommand},
     systems::event_system::{Event, EventHandler, EventPool, EventValue},
 };
 use async_trait::async_trait;
+use crossterm::event;
 use ratatui::widgets::{List, ListItem};
 use std::{
     fs::File,
@@ -54,8 +55,8 @@ impl Component for ConnectionListComponent {
 #[async_trait]
 impl EventHandler for ConnectionListComponent {
     async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
-        if let EventValue::OnConnection(value) = &event.value {
-            match value {
+        match &event.value {
+            EventValue::OnConnection(value) => match value {
                 ConnectionEvent::Add(value) => {
                     self.info.data.push(value.clone());
 
@@ -65,7 +66,32 @@ impl EventHandler for ConnectionListComponent {
                     let mut file = File::open(path).unwrap();
                     //file.write_all(value.clone());
                 }
+                _ => {}
+            },
+            EventValue::OnInput(value) => {
+                if self.info.id == event.component_id {
+                    match value.key.code {
+                        event::KeyCode::Enter => {
+                            pool.lock().unwrap().trigger(Event {
+                                component_id: event.component_id,
+                                // TODO: Remove this hardcoded indexing
+                                value: EventValue::OnConnection(ConnectionEvent::Connect(
+                                    self.info.data[0].clone(),
+                                )),
+                            });
+                            pool.lock().unwrap().trigger(Event {
+                                component_id: event.component_id,
+                                // TODO: Remove this hardcoded indexing
+                                value: EventValue::OnWindowCommand(
+                                    WindowCommand::SetFocusedWindow(2),
+                                ),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
             }
+            _ => {}
         }
     }
 }

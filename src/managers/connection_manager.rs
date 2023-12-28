@@ -2,6 +2,7 @@ use crate::ui::components::connection::ConnectionInfo;
 
 pub enum ConnectionEvent {
     Add(ConnectionInfo),
+    Connect(ConnectionInfo),
 }
 
 pub struct ConnectionManager {

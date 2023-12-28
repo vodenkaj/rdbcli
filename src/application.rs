@@ -43,8 +43,8 @@ impl App {
             mode: Mode::View,
             logs: Vec::new(),
             window_manager: WindowManagerBuilder::new()
-                .with_window(get_login_layout())
-                .with_window(get_connections_layout(auth_manager.clone()))
+                //.with_window(get_login_layout())
+                //.with_window(get_connections_layout(auth_manager.clone()))
                 .with_window(get_table_layout().await)
                 .build(auth_manager.clone()),
             terminal: Arc::new(Mutex::new(terminal)),
@@ -111,8 +111,7 @@ impl App {
                     mode: self.mode,
                     key,
                 }),
-            })
-            .await;
+            });
         match self.mode {
             Mode::View => match key.code {
                 event::KeyCode::Char('q') => {

@@ -83,6 +83,10 @@ impl ScrollableTableState {
         self.vertical_select
     }
 
+    pub fn get_vertical_offset(&self) -> usize {
+        self.vertical_offset
+    }
+
     pub fn reset(&mut self) {
         self.set_horizontal_offset(0);
         self.set_vertical_offset(0);

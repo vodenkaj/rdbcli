@@ -41,8 +41,12 @@ impl DerefMut for DatabaseData {
     }
 }
 
+pub type PaginationInfo = (u64, i64);
+
+pub const LIMIT: i64 = 100;
+
 #[async_trait]
 pub trait Connector: Send {
     async fn get_info(&self) -> &ConnectorInfo;
-    async fn get_data(&self, query: &str) -> Result<DatabaseData>;
+    async fn get_data(&self, query: &str, pagination: PaginationInfo) -> Result<DatabaseData>;
 }

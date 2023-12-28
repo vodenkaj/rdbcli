@@ -1,5 +1,5 @@
 use crate::{
-    connectors::base::{Connector, ConnectorInfo, DatabaseData, TableData},
+    connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
     widgets::scrollable_table::Row,
 };
 use anyhow::{Context, Result};
@@ -76,7 +76,7 @@ impl Connector for MongodbConnector {
         &self.info
     }
 
-    async fn get_data(&self, str: &str) -> Result<DatabaseData> {
+    async fn get_data(&self, str: &str, (start, limit): PaginationInfo) -> Result<DatabaseData> {
         let (collection_name, command_type, query) = Regex::new(COMMAND_REGEX)?
             .captures(str)
             .map(|m| {
@@ -111,7 +111,8 @@ impl Connector for MongodbConnector {
         let mut cursor = match command_type {
             CommandType::Find => {
                 let mut opt = FindOptions::default();
-                opt.limit = Some(100);
+                opt.skip = Some(start);
+                opt.limit = Some(limit);
                 collection.find(bson, opt).await?
             }
             CommandType::Aggregate => {

@@ -11,13 +11,18 @@ use super::{
     window::{Window, WindowBuilder},
 };
 use crate::{
-    connectors::{base::TableData, mongodb::connector::MongodbConnectorBuilder},
+    connectors::{
+        base::TableData,
+        mongodb::connector::{MongodbConnector, MongodbConnectorBuilder},
+    },
     managers::auth_manager::AuthManager,
     systems::event_system::{EventManager, EventType},
     widgets::scrollable_table::ScrollableTableState,
 };
+use crossterm::event;
 use ratatui::layout::Constraint;
 use std::{
+    env,
     fs::File,
     io::Read,
     path::Path,
@@ -27,6 +32,22 @@ use std::{
 pub async fn get_table_layout() -> Arc<Mutex<Window>> {
     let event_manager = EventManager::new();
     let mut events = event_manager.lock().unwrap();
+    let (_, db_uri) = env::vars()
+        .find(|(key, _)| *key == String::from("DB_URI"))
+        .expect("DB_URI to be present");
+
+    let connector = if db_uri.contains("mongodb") {
+        MongodbConnectorBuilder::new(&db_uri)
+            .build()
+            .await
+            .expect("Mongodb connector to be build")
+    } else {
+        //TODO: POSTGRES
+        MongodbConnectorBuilder::new(&db_uri)
+            .build()
+            .await
+            .expect("Mongodb connector to be build")
+    };
 
     let table = Arc::new(Mutex::new(ScrollableTableComponent::new(
         ComponentCreateInfo {
@@ -37,12 +58,7 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
             visible: true,
         },
         ScrollableTableState::default(),
-        Box::new(
-            MongodbConnectorBuilder::new("mongodb://localhost:27017")
-                .build()
-                .await
-                .unwrap(),
-        ),
+        Box::new(connector),
     )));
     events.subscribe(table.clone(), EventType::DatabaseData);
     events.subscribe(table.clone(), EventType::OnInput);
@@ -93,6 +109,7 @@ pub fn get_connections_layout(auth_manager: Arc<Mutex<AuthManager>>) -> Arc<Mute
         },
     )));
     events.subscribe(list.clone(), EventType::OnConnectionAdd);
+    events.subscribe(list.clone(), EventType::OnInput);
 
     let add_connection = Arc::new(Mutex::new(ConnectionComponent::new(ComponentCreateInfo {
         visible: false,
@@ -101,8 +118,10 @@ pub fn get_connections_layout(auth_manager: Arc<Mutex<AuthManager>>) -> Arc<Mute
         focusable: true,
         id: 1,
     })));
-    let cloned_comp = add_connection.clone();
     events.subscribe(add_connection.clone(), EventType::OnInput);
+
+    let cloned_comp = add_connection.clone();
+    let cloned_comp_2 = add_connection.clone();
 
     let window = Arc::new(Mutex::new(
         WindowBuilder::new()
@@ -111,9 +130,17 @@ pub fn get_connections_layout(auth_manager: Arc<Mutex<AuthManager>>) -> Arc<Mute
             .build(event_manager.clone()),
     ));
     window.lock().unwrap().with_keybind(
-        "a".to_string(),
-        Box::new(move |_| {
+        event::KeyCode::Char('a'),
+        Box::new(move |window| {
             cloned_comp.lock().unwrap().set_visibility(true);
+            window.focused_component_idx = 1;
+        }),
+    );
+    window.lock().unwrap().with_keybind(
+        event::KeyCode::Esc,
+        Box::new(move |window| {
+            cloned_comp_2.lock().unwrap().set_visibility(false);
+            window.focused_component_idx = 0;
         }),
     );
 

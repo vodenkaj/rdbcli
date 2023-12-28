@@ -69,7 +69,7 @@ impl EventPool {
 #[derive(Default)]
 pub struct EventManager {
     pub handlers: HashMap<EventType, Vec<Arc<Mutex<dyn EventHandler>>>>,
-    pool: Arc<Mutex<EventPool>>,
+    pub pool: Arc<Mutex<EventPool>>,
 }
 
 #[async_trait]
@@ -120,7 +120,7 @@ impl EventManager {
         self.pool.lock().unwrap().events.push(Arc::new(event));
     }
 
-    pub async fn trigger_event_sync(&mut self, event: Event) {
-        self.handle_event(Arc::new(event)).await;
+    pub fn trigger_event_sync(&mut self, event: Event) {
+        block_on(self.handle_event(Arc::new(event)));
     }
 }
