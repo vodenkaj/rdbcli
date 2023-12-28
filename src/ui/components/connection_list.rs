@@ -6,12 +6,12 @@ use crate::{
     managers::{connection_manager::ConnectionEvent, window_manager::WindowCommand},
     systems::event_system::{Event, EventHandler, EventPool, EventValue},
 };
+use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::widgets::{List, ListItem};
 use std::{
     fs::File,
-    io::Write,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -54,7 +54,7 @@ impl Component for ConnectionListComponent {
 
 #[async_trait]
 impl EventHandler for ConnectionListComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         match &event.value {
             EventValue::OnConnection(value) => match value {
                 ConnectionEvent::Add(value) => {
@@ -93,5 +93,6 @@ impl EventHandler for ConnectionListComponent {
             }
             _ => {}
         }
+        Ok(())
     }
 }

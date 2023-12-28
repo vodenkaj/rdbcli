@@ -5,10 +5,11 @@ use crossterm::{
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::application::App;
+use core::time;
 use std::{
     io::{self},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Duration, thread,
 };
 
 #[tokio::main]
@@ -33,6 +34,7 @@ async fn main() {
         if handle.should_exit {
             break;
         }
+        thread::sleep(time::Duration::from_millis(10));
     }
 
     disable_raw_mode().unwrap();

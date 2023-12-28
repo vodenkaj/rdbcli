@@ -4,6 +4,7 @@ use crate::{
     managers::auth_manager::AuthCommand,
     systems::event_system::{Event, EventHandler, EventPool, EventValue},
 };
+use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::widgets::Paragraph;
@@ -48,7 +49,7 @@ impl Component for LoginComponent {
 
 #[async_trait]
 impl EventHandler for LoginComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnInput(value) = &event.value {
             if let Mode::Input = value.mode {
                 match value.key.code {
@@ -71,5 +72,6 @@ impl EventHandler for LoginComponent {
                 }
             }
         }
+        Ok(())
     }
 }

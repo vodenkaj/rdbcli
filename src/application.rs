@@ -6,7 +6,7 @@ use crate::{
     },
     systems::event_system::{Event, EventValue},
     ui::{
-        layouts::{get_connections_layout, get_login_layout, get_table_layout},
+        layouts::get_table_layout,
         window::{OnInputInfo, WindowRenderInfo},
     },
 };
@@ -99,19 +99,25 @@ impl App {
             event_manager = window.event_manager.clone();
             focused = window.focused_component_idx;
         }
-        event_manager
-            .lock()
-            .unwrap()
-            .trigger_event_sync(Event {
+        let mut events = event_manager.lock().unwrap();
+        let result = events.trigger_event_sync(Event {
+            component_id: focused,
+            value: EventValue::OnInput(OnInputInfo {
+                connection_manager: self.connection_manager.clone(),
+                window_manager: self.window_manager.clone(),
+                terminal: self.terminal.clone(),
+                mode: self.mode,
+                key,
+            }),
+        });
+
+        if let Err(err) = result {
+            self.log(&err.to_string());
+            events.trigger_event_sync(Event {
                 component_id: focused,
-                value: EventValue::OnInput(OnInputInfo {
-                    connection_manager: self.connection_manager.clone(),
-                    window_manager: self.window_manager.clone(),
-                    terminal: self.terminal.clone(),
-                    mode: self.mode,
-                    key,
-                }),
-            });
+                value: EventValue::OnError(err.to_string()),
+            }).unwrap();
+        }
         match self.mode {
             Mode::View => match key.code {
                 event::KeyCode::Char('q') => {

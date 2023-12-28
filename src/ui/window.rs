@@ -4,6 +4,7 @@ use crate::{
     managers::{connection_manager::ConnectionManager, window_manager::WindowManager},
     systems::event_system::{Event, EventHandler, EventManager, EventPool, EventValue},
 };
+use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::{
@@ -29,7 +30,7 @@ pub struct WindowBuilder {
 
 #[async_trait]
 impl EventHandler for Window {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnInput(value) = &event.value {
             match value.key.code {
                 event::KeyCode::Char(ch) => {
@@ -41,6 +42,7 @@ impl EventHandler for Window {
                 _ => {}
             }
         }
+        Ok(())
     }
 }
 
@@ -132,7 +134,7 @@ impl Window {
             .trigger_event_sync(Event {
                 component_id: self.focused_component_idx,
                 value: EventValue::OnInput(info),
-            });
+            })?;
         Ok(())
     }
 

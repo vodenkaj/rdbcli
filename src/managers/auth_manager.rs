@@ -1,4 +1,5 @@
 use crate::systems::event_system::{Event, EventHandler, EventPool, EventValue};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use pam_client::{conv_mock::Conversation, Context, Flag};
@@ -58,7 +59,7 @@ impl Default for AuthManager {
 
 #[async_trait]
 impl EventHandler for AuthManager {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnAuthCommand(cmd) = &event.value {
             match cmd {
                 AuthCommand::Login(value) => {
@@ -72,5 +73,6 @@ impl EventHandler for AuthManager {
                 }
             }
         }
+        Ok(())
     }
 }

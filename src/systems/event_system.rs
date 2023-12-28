@@ -6,7 +6,9 @@ use crate::{
     },
     ui::window::OnInputInfo,
 };
+use anyhow::Result;
 use async_trait::async_trait;
+use core::time;
 use futures::executor::block_on;
 use std::{
     collections::HashMap,
@@ -21,6 +23,7 @@ pub struct Event {
 
 pub enum EventValue {
     OnInput(OnInputInfo),
+    OnError(String),
     DatabaseData(Arc<DatabaseData>),
     OnQuery(String),
     OnAuthCommand(AuthCommand),
@@ -36,11 +39,13 @@ pub enum EventType {
     OnWindowCommand,
     OnAuthCommand,
     OnConnectionAdd,
+    OnError,
 }
 
 impl Event {
     pub fn get_type(&self) -> EventType {
         match self.value {
+            EventValue::OnError(_) => EventType::OnError,
             EventValue::OnInput(_) => EventType::OnInput,
             EventValue::DatabaseData(_) => EventType::DatabaseData,
             EventValue::OnQuery(_) => EventType::OnQuery,
@@ -74,7 +79,7 @@ pub struct EventManager {
 
 #[async_trait]
 pub trait EventHandler: Send {
-    async fn on_event(&mut self, event: (&Event, Arc<Mutex<EventPool>>));
+    async fn on_event(&mut self, event: (&Event, Arc<Mutex<EventPool>>)) -> Result<()>;
 }
 
 impl EventManager {
@@ -82,7 +87,8 @@ impl EventManager {
         let manager = Arc::new(Mutex::new(Self::default()));
         let cloned = manager.clone();
         thread::spawn(move || loop {
-            block_on(cloned.lock().expect("Event manager to be poisoned").pool())
+            block_on(cloned.lock().expect("Event manager to be poisoned").pool());
+            thread::sleep(time::Duration::from_secs(1));
         });
 
         manager
@@ -100,16 +106,17 @@ impl EventManager {
         }
     }
 
-    async fn handle_event(&mut self, event: Arc<Event>) {
+    async fn handle_event(&mut self, event: Arc<Event>) -> Result<()> {
         if let Some(handlers) = self.handlers.get_mut(&event.get_type()) {
             for handler in handlers.iter_mut() {
                 handler
                     .lock()
                     .unwrap()
                     .on_event((&event, self.pool.clone()))
-                    .await;
+                    .await?
             }
         }
+        Ok(())
     }
 
     pub fn subscribe(&mut self, handler: Arc<Mutex<dyn EventHandler>>, event_type: EventType) {
@@ -120,7 +127,11 @@ impl EventManager {
         self.pool.lock().unwrap().events.push(Arc::new(event));
     }
 
-    pub fn trigger_event_sync(&mut self, event: Event) {
-        block_on(self.handle_event(Arc::new(event)));
+    pub fn trigger_event_sync(&mut self, event: Event) -> Result<()> {
+        let mut result: Result<()> = Ok(());
+        block_on(async {
+            result = self.handle_event(Arc::new(event)).await;
+        });
+        result
     }
 }

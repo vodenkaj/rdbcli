@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Ok, Result};
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::{
@@ -106,11 +107,7 @@ impl Component for ConnectionComponent {
 
 #[async_trait]
 impl EventHandler for ConnectionComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
-        if !self.is_visible() {
-            return;
-        }
-
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnInput(value) = &event.value {
             match self.focused {
                 FocusedInput::Type => match value.key.code {
@@ -156,6 +153,7 @@ impl EventHandler for ConnectionComponent {
                 },
             }
         }
+        Ok(())
     }
 }
 

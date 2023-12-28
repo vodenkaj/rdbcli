@@ -15,7 +15,7 @@ use crate::{
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
-use anyhow::Ok;
+use anyhow::{Ok, Result};
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::layout::Constraint;
@@ -49,7 +49,10 @@ impl ScrollableTableComponent {
             vertical_offset: 0,
             horizontal_offset_max: 0,
             vertical_offset_max: 0,
-            pagination: (0, LIMIT + 1),
+            pagination: PaginationInfo {
+                start: 0,
+                limit: LIMIT,
+            },
         }
     }
 
@@ -93,22 +96,22 @@ impl ScrollableTableComponent {
                 .set_vertical_select(self.vertical_offset as usize);
         }
         let offset = self.state.get_vertical_offset() + self.state.get_vertical_select();
-        if offset >= 50 && matches!(dir, VerticalDirection::Down) {
-            self.state.reset();
+        if offset == LIMIT as usize && matches!(dir, VerticalDirection::Down) {
             self.vertical_offset = 1;
-            self.pagination.0 += 49;
+            self.pagination.start += LIMIT - 1;
+            self.state.reset();
             self.refetch_data().await.unwrap();
         }
         if offset == 1
             && matches!(dir, VerticalDirection::Up)
-            && self.pagination.0 > 0
-            && (self.pagination.0 % 49).to_string() == "0"
+            && self.pagination.start > 0
+            && (self.pagination.start % (LIMIT - 1)).to_string() == "0"
         {
-            self.vertical_offset = 49;
+            self.vertical_offset = (LIMIT - 1) as i32;
             self.state
                 .set_vertical_offset((self.vertical_offset - 10) as usize);
             self.state.set_vertical_select(10);
-            self.pagination.0 -= 49;
+            self.pagination.start -= LIMIT - 1;
             self.refetch_data().await.unwrap();
         }
     }
@@ -118,7 +121,7 @@ impl ScrollableTableComponent {
             .connector
             .as_ref()
             .expect("Connector to be initilized")
-            .get_data(&self.query, self.pagination)
+            .get_data(&self.query, &self.pagination)
             .await?;
         self.data = Arc::new(data);
         self.info.data = TableData::from(self.data.clone());
@@ -153,21 +156,18 @@ impl Component for ScrollableTableComponent {
 
 #[async_trait]
 impl EventHandler for ScrollableTableComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         match &event.value {
             EventValue::OnConnection(value) => match value {
                 ConnectionEvent::Connect(value) => self.set_connector(Box::new(
-                    MongodbConnectorBuilder::new(&value.uri)
-                        .build()
-                        .await
-                        .unwrap(),
+                    MongodbConnectorBuilder::new(&value.uri).build().await?,
                 )),
                 _ => {}
             },
             EventValue::OnInput(value) => match value.key.code {
                 event::KeyCode::Char('i') => {
                     EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
-                    self.refetch_data().await;
+                    self.refetch_data().await?;
                     value.terminal.lock().unwrap().clear();
                 }
                 event::KeyCode::Left | event::KeyCode::Char('h') => {
@@ -185,13 +185,11 @@ impl EventHandler for ScrollableTableComponent {
                         .await;
                 }
                 event::KeyCode::Enter => {
-                    EXTERNAL_EDITOR
-                        .edit_value(
-                            &mut self.data[self.state.get_vertical_select() - 1
-                                + self.state.get_vertical_offset()]
-                            .to_string(),
-                        )
-                        .unwrap();
+                    EXTERNAL_EDITOR.edit_value(
+                        &mut self.data[self.state.get_vertical_select() - 1
+                            + self.state.get_vertical_offset()]
+                        .to_string(),
+                    )?;
                 }
                 _ => {}
             },
@@ -202,5 +200,6 @@ impl EventHandler for ScrollableTableComponent {
             }
             _ => {}
         }
+        Ok(())
     }
 }

@@ -5,3 +5,4 @@ pub mod input;
 pub mod login;
 pub mod paragraph;
 pub mod scrollable_table;
+pub mod command;

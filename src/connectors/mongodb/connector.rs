@@ -2,7 +2,7 @@ use crate::{
     connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
     widgets::scrollable_table::Row,
 };
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use futures::stream::TryStreamExt;
@@ -13,7 +13,7 @@ use mongodb::{
 };
 use regex::Regex;
 use serde_json::{Map, Value};
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -56,16 +56,14 @@ enum CommandType {
     Count,
 }
 
-impl FromStr for CommandType {
-    type Err = ();
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+impl CommandType {
+    fn from_str(s: &str) -> Result<CommandType> {
         let l_s = s.to_lowercase();
         match l_s.as_str() {
             "find" => Ok(CommandType::Find),
             "aggregate" => Ok(CommandType::Aggregate),
             "count" => Ok(CommandType::Count),
-            _ => Err(()),
+            _ => Err(anyhow!("Invalid command type")),
         }
     }
 }
@@ -76,23 +74,35 @@ impl Connector for MongodbConnector {
         &self.info
     }
 
-    async fn get_data(&self, str: &str, (start, limit): PaginationInfo) -> Result<DatabaseData> {
+    async fn get_data(
+        &self,
+        str: &str,
+        PaginationInfo { start, limit }: &PaginationInfo,
+    ) -> Result<DatabaseData> {
         let (collection_name, command_type, query) = Regex::new(COMMAND_REGEX)?
             .captures(str)
             .map(|m| {
-                let collection_name = m.get(1).unwrap().as_str();
-                let command_type = CommandType::from_str(m.get(2).unwrap().as_str()).unwrap();
+                let collection_name = m
+                    .get(1)
+                    .context("Did not find collection name in the query")?
+                    .as_str();
+                let command_type = CommandType::from_str(
+                    m.get(2)
+                        .context("Did not find command type in the query")?
+                        .as_str(),
+                )?;
                 let query = if let Some(query) = m.get(3) {
                     query.as_str().to_string()
                 } else {
                     String::from("{}")
                 };
 
-                (collection_name, command_type, query)
+                anyhow::Ok((collection_name.to_string(), command_type, query))
             })
-            .with_context(|| format!("'{}' is not valid mongo query!", str))?;
+            .with_context(|| format!("'{}' is not valid mongo query!", str))?
+            .unwrap();
         let db = self.client.database("reas-dealer");
-        let collection: mongodb::Collection<Document> = db.collection(collection_name);
+        let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
         let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?
             .replace_all(&query, "\"$1\":")
@@ -103,16 +113,17 @@ impl Connector for MongodbConnector {
         str_fixed = Regex::new(DATE_TO_STRING_REGEX)?
             .replace_all(&str_fixed, "\"$1\"")
             .to_string();
-        let value: Map<String, Value> = serde_json::from_str(&str_fixed).unwrap();
-        let mut bson = Document::try_from(value).unwrap();
+        let value: Map<String, Value> = serde_json::from_str(&str_fixed)
+            .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
+        let mut bson = Document::try_from(value)?;
         bson.iter_mut().for_each(|(_, value)| resolve(value));
 
         let mut result = DatabaseData(Vec::new());
         let mut cursor = match command_type {
             CommandType::Find => {
                 let mut opt = FindOptions::default();
-                opt.skip = Some(start);
-                opt.limit = Some(limit);
+                opt.skip = Some(*start);
+                opt.limit = Some(*limit as i64);
                 collection.find(bson, opt).await?
             }
             CommandType::Aggregate => {

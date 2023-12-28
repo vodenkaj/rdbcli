@@ -3,6 +3,7 @@ use crate::{
     systems::event_system::{Event, EventHandler, EventPool, EventType, EventValue},
     ui::window::Window,
 };
+use anyhow::Result;
 use async_trait::async_trait;
 use std::{
     collections::HashMap,
@@ -27,7 +28,7 @@ impl WindowManager {
 
 #[async_trait]
 impl EventHandler for WindowManager {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) {
+    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnWindowCommand(cmd) = &event.value {
             match cmd {
                 WindowCommand::SetFocusedWindow(value) => {
@@ -41,6 +42,7 @@ impl EventHandler for WindowManager {
                 }
             }
         }
+        Ok(())
     }
 }
 

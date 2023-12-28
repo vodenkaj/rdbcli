@@ -1,6 +1,7 @@
 use super::{
     components::{
         base::{Component, ComponentCreateInfo},
+        command::CommandComponent,
         connection::{ConnectionComponent, ConnectionInfo},
         connection_list::ConnectionListComponent,
         input::InputComponent,
@@ -63,17 +64,14 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
     events.subscribe(table.clone(), EventType::DatabaseData);
     events.subscribe(table.clone(), EventType::OnInput);
 
-    let command = Arc::new(Mutex::new(InputComponent::new(
-        ComponentCreateInfo {
-            focusable: true,
-            visible: true,
-            constraint: Constraint::Length(1),
-            data: String::new(),
-            id: 1,
-        },
-        false,
-    )));
-    events.subscribe(command.clone(), EventType::OnInput);
+    let command = Arc::new(Mutex::new(CommandComponent::new(ComponentCreateInfo {
+        focusable: true,
+        visible: true,
+        constraint: Constraint::Length(1),
+        data: String::new(),
+        id: 1,
+    })));
+    events.subscribe(command.clone(), EventType::OnError);
 
     Arc::new(Mutex::new(
         WindowBuilder::new()
