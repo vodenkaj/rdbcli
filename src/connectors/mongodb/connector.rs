@@ -13,7 +13,11 @@ use mongodb::{
 };
 use regex::Regex;
 use serde_json::{Map, Value};
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::SystemTime,
+};
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -157,15 +161,24 @@ impl<'a> From<Arc<DatabaseData>> for TableData<'a> {
         let mut body = Vec::new();
 
         if !value.is_empty() {
-            let keys = value[0]
-                .as_object()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut unique_keys = HashSet::new();
+            let keys: Vec<String> = value
+                .iter()
+                .fold(Vec::new(), |mut acc, value| {
+                    let keys: Vec<String> = value
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .filter(|key| !unique_keys.contains(*key))
+                        .cloned()
+                        .collect();
+                    acc.extend::<Vec<String>>(keys.clone());
+                    unique_keys.extend(keys);
+                    acc
+                })
+                .to_vec();
             {
                 header = Row::new(keys.clone());
-                // TODO: Keys could be in wrong order
                 body = value
                     .iter()
                     .cloned()
@@ -173,24 +186,27 @@ impl<'a> From<Arc<DatabaseData>> for TableData<'a> {
                         let mut cloned = x.clone();
                         let obj = cloned.as_object_mut().unwrap();
                         let mut parsed_obj = HashMap::new();
-                        obj.iter().for_each(|(key, value)| {
-                            let parsed_value = match value {
-                                serde_json::Value::Object(v) => {
-                                    let bson = Bson::try_from(v.clone()).unwrap();
-                                    if let Some(date) = bson.as_datetime() {
-                                        date.try_to_rfc3339_string().unwrap()
-                                    } else {
-                                        value.to_string()
+                        keys.iter().for_each(|key| {
+                            let mut parsed_value = String::new();
+                            if let Some(value) = obj.get(key) {
+                                parsed_value = match value {
+                                    serde_json::Value::Object(v) => {
+                                        let bson = Bson::try_from(v.clone()).unwrap();
+                                        if let Some(date) = bson.as_datetime() {
+                                            date.try_to_rfc3339_string().unwrap()
+                                        } else {
+                                            value.to_string()
+                                        }
                                     }
-                                }
-                                v => v.to_string(),
-                            };
+                                    v => v.to_string(),
+                                };
+                            }
                             parsed_obj.insert(key, parsed_value);
                         });
                         Row::new(
                             keys.iter()
                                 .filter(|key| parsed_obj.get(key.to_owned()).is_some())
-                                .map(|key| parsed_obj.get(key).unwrap().to_string()),
+                                .map(|key| String::from(parsed_obj.get(key).unwrap())),
                         )
                     })
                     .collect::<Vec<Row>>();

@@ -1,7 +1,7 @@
 use super::{
     components::{
         base::{Component, ComponentCreateInfo},
-        command::CommandComponent,
+        command::{CommandComponent, Message},
         connection::{ConnectionComponent, ConnectionInfo},
         connection_list::ConnectionListComponent,
         input::InputComponent,
@@ -68,7 +68,7 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
         focusable: true,
         visible: true,
         constraint: Constraint::Length(1),
-        data: String::new(),
+        data: Message::default(),
         id: 1,
     })));
     events.subscribe(command.clone(), EventType::OnError);

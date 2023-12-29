@@ -185,11 +185,10 @@ impl EventHandler for ScrollableTableComponent {
                         .await;
                 }
                 event::KeyCode::Enter => {
-                    EXTERNAL_EDITOR.edit_value(
-                        &mut self.data[self.state.get_vertical_select() - 1
-                            + self.state.get_vertical_offset()]
-                        .to_string(),
-                    )?;
+                    EXTERNAL_EDITOR.edit_value(&mut serde_json::to_string_pretty(
+                        &self.data[self.state.get_vertical_select() - 1
+                            + self.state.get_vertical_offset()],
+                    )?)?;
                 }
                 _ => {}
             },
