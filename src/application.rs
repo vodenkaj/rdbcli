@@ -6,6 +6,7 @@ use crate::{
     },
     systems::event_system::{Event, EventValue},
     ui::{
+        components::command::{Message, Severity},
         layouts::get_table_layout,
         window::{OnInputInfo, WindowRenderInfo},
     },
@@ -113,10 +114,15 @@ impl App {
 
         if let Err(err) = result {
             self.log(&err.to_string());
-            events.trigger_event_sync(Event {
-                component_id: focused,
-                value: EventValue::OnError(err.to_string()),
-            }).unwrap();
+            events
+                .trigger_event_sync(Event {
+                    component_id: focused,
+                    value: EventValue::OnMessage(Message {
+                        value: err.to_string(),
+                        severity: Severity::Error,
+                    }),
+                })
+                .unwrap();
         }
         match self.mode {
             Mode::View => match key.code {

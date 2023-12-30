@@ -3,6 +3,7 @@ use crate::ui::components::connection::ConnectionInfo;
 pub enum ConnectionEvent {
     Add(ConnectionInfo),
     Connect(ConnectionInfo),
+    SwitchDatabase(String),
 }
 
 pub struct ConnectionManager {

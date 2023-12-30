@@ -4,7 +4,7 @@ use crate::{
         auth_manager::AuthCommand, connection_manager::ConnectionEvent,
         window_manager::WindowCommand,
     },
-    ui::window::OnInputInfo,
+    ui::{window::OnInputInfo, components::command::Message},
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ pub struct Event {
 
 pub enum EventValue {
     OnInput(OnInputInfo),
-    OnError(String),
+    OnMessage(Message),
     DatabaseData(Arc<DatabaseData>),
     OnQuery(String),
     OnAuthCommand(AuthCommand),
@@ -38,20 +38,20 @@ pub enum EventType {
     OnQuery,
     OnWindowCommand,
     OnAuthCommand,
-    OnConnectionAdd,
-    OnError,
+    OnConnection,
+    OnMessage,
 }
 
 impl Event {
     pub fn get_type(&self) -> EventType {
         match self.value {
-            EventValue::OnError(_) => EventType::OnError,
             EventValue::OnInput(_) => EventType::OnInput,
             EventValue::DatabaseData(_) => EventType::DatabaseData,
             EventValue::OnQuery(_) => EventType::OnQuery,
             EventValue::OnAuthCommand(_) => EventType::OnAuthCommand,
             EventValue::OnWindowCommand(_) => EventType::OnWindowCommand,
-            EventValue::OnConnection(_) => EventType::OnConnectionAdd,
+            EventValue::OnConnection(_) => EventType::OnConnection,
+            EventValue::OnMessage(_) => EventType::OnMessage,
         }
     }
 }
@@ -88,7 +88,7 @@ impl EventManager {
         let cloned = manager.clone();
         thread::spawn(move || loop {
             block_on(cloned.lock().expect("Event manager to be poisoned").pool());
-            thread::sleep(time::Duration::from_secs(1));
+            thread::sleep(time::Duration::from_millis(10));
         });
 
         manager

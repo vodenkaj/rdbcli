@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
+use super::{
+    base::{Component, ComponentCreateInfo, ComponentDrawInfo},
+    command::{Message, Severity},
+};
 use crate::{
     connectors::{
         base::{Connector, DatabaseData, PaginationInfo, TableData, LIMIT},
@@ -15,7 +18,7 @@ use crate::{
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use async_trait::async_trait;
 use crossterm::event;
 use ratatui::layout::Constraint;
@@ -120,12 +123,12 @@ impl ScrollableTableComponent {
         let data = self
             .connector
             .as_ref()
-            .expect("Connector to be initilized")
+            .with_context(|| "Connector must be initilized")?
             .get_data(&self.query, &self.pagination)
             .await?;
         self.data = Arc::new(data);
         self.info.data = TableData::from(self.data.clone());
-        self.horizontal_offset_max = (self.info.data.header.cells.len() - 1) as i32;
+        self.horizontal_offset_max = self.info.data.header.cells.len() as i32 - 1;
         self.vertical_offset_max = self.info.data.rows.len() as i32;
         Ok(())
     }
@@ -162,36 +165,52 @@ impl EventHandler for ScrollableTableComponent {
                 ConnectionEvent::Connect(value) => self.set_connector(Box::new(
                     MongodbConnectorBuilder::new(&value.uri).build().await?,
                 )),
-                _ => {}
-            },
-            EventValue::OnInput(value) => match value.key.code {
-                event::KeyCode::Char('i') => {
-                    EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
-                    self.refetch_data().await?;
-                    value.terminal.lock().unwrap().clear();
-                }
-                event::KeyCode::Left | event::KeyCode::Char('h') => {
-                    self.handle_next_horizontal_movement(HorizontalDirection::Left)
-                }
-                event::KeyCode::Right | event::KeyCode::Char('l') => {
-                    self.handle_next_horizontal_movement(HorizontalDirection::Right)
-                }
-                event::KeyCode::Down | event::KeyCode::Char('j') => {
-                    self.handle_next_vertical_movement(VerticalDirection::Down)
-                        .await;
-                }
-                event::KeyCode::Up | event::KeyCode::Char('k') => {
-                    self.handle_next_vertical_movement(VerticalDirection::Up)
-                        .await;
-                }
-                event::KeyCode::Enter => {
-                    EXTERNAL_EDITOR.edit_value(&mut serde_json::to_string_pretty(
-                        &self.data[self.state.get_vertical_select() - 1
-                            + self.state.get_vertical_offset()],
-                    )?)?;
+                ConnectionEvent::SwitchDatabase(value) => {
+                    self.connector.as_mut().unwrap().set_database(value);
+                    pool.lock().unwrap().trigger(Event {
+                        component_id: 0,
+                        value: EventValue::OnMessage(Message {
+                            value: format!("Database switched to '{}'", value),
+                            severity: Severity::Info,
+                        }),
+                    });
                 }
                 _ => {}
             },
+            EventValue::OnInput(value) => {
+                if matches!(value.mode, crate::application::Mode::View) {
+                    match value.key.code {
+                        event::KeyCode::Char('i') => {
+                            EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
+                            self.refetch_data().await?;
+                            value.terminal.lock().unwrap().clear()?;
+                        }
+                        event::KeyCode::Left | event::KeyCode::Char('h') => {
+                            self.handle_next_horizontal_movement(HorizontalDirection::Left)
+                        }
+                        event::KeyCode::Right | event::KeyCode::Char('l') => {
+                            self.handle_next_horizontal_movement(HorizontalDirection::Right)
+                        }
+                        event::KeyCode::Down | event::KeyCode::Char('j') => {
+                            self.handle_next_vertical_movement(VerticalDirection::Down)
+                                .await;
+                        }
+                        event::KeyCode::Up | event::KeyCode::Char('k') => {
+                            self.handle_next_vertical_movement(VerticalDirection::Up)
+                                .await;
+                        }
+                        event::KeyCode::Enter => {
+                            if self.data.len() > 0 {
+                                EXTERNAL_EDITOR.edit_value(&mut serde_json::to_string_pretty(
+                                    &self.data[self.state.get_vertical_select() - 1
+                                        + self.state.get_vertical_offset()],
+                                )?)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             EventValue::DatabaseData(value) => {
                 self.info.data = TableData::from(value.clone());
                 self.horizontal_offset_max = (self.info.data.header.cells.len() - 1) as i32;

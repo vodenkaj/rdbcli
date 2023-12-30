@@ -61,6 +61,7 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
         ScrollableTableState::default(),
         Box::new(connector),
     )));
+    events.subscribe(table.clone(), EventType::OnConnection);
     events.subscribe(table.clone(), EventType::DatabaseData);
     events.subscribe(table.clone(), EventType::OnInput);
 
@@ -71,7 +72,8 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
         data: Message::default(),
         id: 1,
     })));
-    events.subscribe(command.clone(), EventType::OnError);
+    events.subscribe(command.clone(), EventType::OnMessage);
+    events.subscribe(command.clone(), EventType::OnInput);
 
     Arc::new(Mutex::new(
         WindowBuilder::new()
@@ -106,7 +108,7 @@ pub fn get_connections_layout(auth_manager: Arc<Mutex<AuthManager>>) -> Arc<Mute
             id: 0,
         },
     )));
-    events.subscribe(list.clone(), EventType::OnConnectionAdd);
+    events.subscribe(list.clone(), EventType::OnConnection);
     events.subscribe(list.clone(), EventType::OnInput);
 
     let add_connection = Arc::new(Mutex::new(ConnectionComponent::new(ComponentCreateInfo {

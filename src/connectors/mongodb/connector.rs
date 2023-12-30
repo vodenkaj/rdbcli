@@ -37,16 +37,19 @@ impl MongodbConnectorBuilder {
         let client_opts = ClientOptions::parse(info.uri.clone()).await?;
         let client = Client::with_options(client_opts)?;
 
-        Ok(MongodbConnector { info, client })
+        Ok(MongodbConnector {
+            info,
+            client,
+            database: String::from("admin"),
+        })
     }
 }
 
 pub struct MongodbConnector {
     info: ConnectorInfo,
     client: Client,
+    database: String,
 }
-
-impl MongodbConnector {}
 
 const COMMAND_REGEX: &str = r#"db.([A-z0-9"]+).([A-z0-9"]+)\((.*)\)"#;
 const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
@@ -74,6 +77,10 @@ impl CommandType {
 
 #[async_trait]
 impl Connector for MongodbConnector {
+    fn set_database(&mut self, database: &str) {
+        self.database = String::from(database);
+    }
+
     async fn get_info(&self) -> &crate::connectors::base::ConnectorInfo {
         &self.info
     }
@@ -105,7 +112,7 @@ impl Connector for MongodbConnector {
             })
             .with_context(|| format!("'{}' is not valid mongo query!", str))?
             .unwrap();
-        let db = self.client.database("reas-dealer");
+        let db = self.client.database(&self.database);
         let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
         let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?

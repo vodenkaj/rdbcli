@@ -1,21 +1,27 @@
-use std::sync::{Arc, Mutex};
-use anyhow::Result;
-use async_trait::async_trait;
-use ratatui::{style::Style, widgets::Paragraph};
-use crate::systems::event_system::{Event, EventHandler, EventPool, EventValue};
 use super::base::{Component, ComponentCreateInfo};
+use crate::{
+    managers::connection_manager::ConnectionEvent,
+    systems::event_system::{Event, EventHandler, EventPool, EventValue},
+};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use crossterm::event;
+use ratatui::{style::Style, widgets::Paragraph};
+use regex::Regex;
+use std::sync::{Arc, Mutex};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub enum Severity {
     #[default]
     Normal,
+    Info,
     Error,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Message {
-    severity: Severity,
-    value: String,
+    pub severity: Severity,
+    pub value: String,
 }
 
 pub struct CommandComponent {
@@ -55,14 +61,47 @@ impl Component for CommandComponent {
     }
 }
 
+const SWITCH_DATABASE_REGEX: &str = r#"c ([A-z0-9\-]+)"#;
+
 #[async_trait]
 impl EventHandler for CommandComponent {
     async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
-        if let EventValue::OnError(value) = &event.value {
-            self.info.data = Message {
-                value: value.clone(),
-                severity: Severity::Error,
+        match &event.value {
+            EventValue::OnMessage(value) => self.info.data = value.clone(),
+            EventValue::OnInput(value) => {
+                if matches!(value.mode, crate::application::Mode::Input) {
+                    if !matches!(self.info.data.severity, Severity::Normal) {
+                        self.info.data = Message::default();
+                    }
+
+                    match value.key.code {
+                        event::KeyCode::Char(value) => {
+                            self.info.data.value += &value.to_string();
+                        }
+                        event::KeyCode::Backspace => {
+                            self.info.data.value.pop();
+                        }
+                        event::KeyCode::Enter => {
+                            let database = Regex::new(SWITCH_DATABASE_REGEX)?
+                                .captures(&self.info.data.value)
+                                .map(|m| anyhow::Ok(m.get(1).unwrap().as_str()))
+                                .with_context(|| {
+                                    format!("'{}' is not valid database name", self.info.data.value)
+                                })?
+                                .unwrap();
+                            pool.lock().unwrap().trigger(Event {
+                                component_id: 0,
+                                value: EventValue::OnConnection(ConnectionEvent::SwitchDatabase(
+                                    database.to_string(),
+                                )),
+                            });
+                            self.info.data.value = String::new();
+                        }
+                        _ => {}
+                    }
+                }
             }
+            _ => {}
         }
         Ok(())
     }
