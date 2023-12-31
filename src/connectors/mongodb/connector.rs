@@ -51,16 +51,33 @@ pub struct MongodbConnector {
     database: String,
 }
 
-const COMMAND_REGEX: &str = r#"db.([A-z0-9"]+).([A-z0-9"]+)\((.*)\)"#;
+const COMMAND_REGEX: &str = r#"db.([A-z0-9"]+).(.*)"#;
 const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
 const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
 const DATE_TO_STRING_REGEX: &str = r"(Date\(([A-z0-9-\/]+?)\))";
 const MAXIMUM_DOCUMENTS: usize = 1_000;
 
+#[derive(Debug)]
 enum CommandType {
     Find,
     Aggregate,
     Count,
+}
+
+enum SubCommandType {
+    Count,
+    Sort,
+}
+
+impl SubCommandType {
+    fn from_str(s: &str) -> Result<SubCommandType> {
+        let l_s = s.to_lowercase();
+        match l_s.as_str() {
+            "sort" => Ok(SubCommandType::Sort),
+            "count" => Ok(SubCommandType::Count),
+            _ => Err(anyhow!("Invalid command type")),
+        }
+    }
 }
 
 impl CommandType {
@@ -90,66 +107,129 @@ impl Connector for MongodbConnector {
         str: &str,
         PaginationInfo { start, limit }: &PaginationInfo,
     ) -> Result<DatabaseData> {
-        let (collection_name, command_type, query) = Regex::new(COMMAND_REGEX)?
+        let (collection_name, commands, sub_commands) = Regex::new(COMMAND_REGEX)?
             .captures(str)
             .map(|m| {
                 let collection_name = m
                     .get(1)
                     .context("Did not find collection name in the query")?
                     .as_str();
-                let command_type = CommandType::from_str(
-                    m.get(2)
-                        .context("Did not find command type in the query")?
-                        .as_str(),
-                )?;
-                let query = if let Some(query) = m.get(3) {
-                    query.as_str().to_string()
-                } else {
-                    String::from("{}")
-                };
 
-                anyhow::Ok((collection_name.to_string(), command_type, query))
+                let raw_command = m
+                    .get(2)
+                    .context("Did not find command type in the query")?
+                    .as_str();
+
+                let mut inside_str = false;
+                let mut args = Vec::new();
+                let mut command = String::new();
+                let mut brackets = Vec::new();
+                let chars: Vec<char> = raw_command.chars().collect();
+                for (idx, ch) in chars.iter().cloned().enumerate() {
+                    command += &ch.to_string();
+                    let is_escaped = if idx > 0 {
+                        chars[idx - 1] == '\\'
+                    } else {
+                        false
+                    };
+                    match ch {
+                        '(' => {
+                            if !inside_str && !is_escaped {
+                                if brackets.is_empty() {
+                                    command.pop();
+                                    args.push(command.to_string());
+                                    command.clear();
+                                }
+                                brackets.push(ch);
+                            }
+                        }
+                        ')' => {
+                            if !inside_str && !is_escaped {
+                                brackets.pop();
+                                if brackets.is_empty() {
+                                    command.pop();
+                                    args.push(command.to_string());
+                                    command.clear();
+                                }
+                            }
+                        }
+                        '"' | '\'' => {
+                            if !is_escaped {
+                                inside_str = !inside_str;
+                            }
+                        }
+                        '.' => {
+                            if brackets.is_empty() {
+                                command.clear();
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+
+                let main_command_args = (
+                    CommandType::from_str(&args[0].clone()).unwrap(),
+                    validate_query(&args[1].clone()).unwrap(),
+                );
+                let sub_commands = args.chunks(2).skip(1).try_fold(Vec::new(), |mut acc, w| {
+                    let query = validate_query(&w[1])?;
+                    let command = SubCommandType::from_str(&w[0])?;
+                    acc.push((command, query));
+                    anyhow::Ok(acc)
+                })?;
+
+                anyhow::Ok((collection_name.to_string(), main_command_args, sub_commands))
             })
-            .with_context(|| format!("'{}' is not valid mongo query!", str))?
-            .unwrap();
+            .with_context(|| format!("'{}' is not valid mongo query!", str))??;
         let db = self.client.database(&self.database);
         let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
-        let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?
-            .replace_all(&query, "\"$1\":")
-            .to_string();
-        str_fixed = Regex::new(REGEX_TO_STRING_REGEX)?
-            .replace_all(&str_fixed, "\"/$1/\"")
-            .to_string();
-        str_fixed = Regex::new(DATE_TO_STRING_REGEX)?
-            .replace_all(&str_fixed, "\"$1\"")
-            .to_string();
-        let value: Map<String, Value> = serde_json::from_str(&str_fixed)
-            .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
-        let mut bson = Document::try_from(value)?;
-        bson.iter_mut().for_each(|(_, value)| resolve(value));
+        let (command_type, query) = commands;
 
-        let mut result = DatabaseData(Vec::new());
         let mut cursor = match command_type {
             CommandType::Find => {
                 let mut opt = FindOptions::default();
                 opt.skip = Some(*start);
                 opt.limit = Some(*limit as i64);
-                collection.find(bson, opt).await?
+
+                let mut return_count = false;
+                sub_commands.iter().for_each(|(cmd, query)| match cmd {
+                    SubCommandType::Count => {
+                        return_count = true;
+                    }
+                    SubCommandType::Sort => {
+                        opt.sort = Some(query.clone());
+                    }
+                });
+
+                if return_count {
+                    let mut match_query = Document::new();
+                    match_query.insert("$match", &query);
+                    collection
+                        .aggregate(
+                            vec![match_query, doc! {"$count": "count"}],
+                            AggregateOptions::default(),
+                        )
+                        .await?
+                } else {
+                    collection.find(query, opt).await?
+                }
             }
             CommandType::Aggregate => {
                 let opt = AggregateOptions::default();
-                collection.aggregate(vec![bson], opt).await?
+                collection.aggregate(vec![query], opt).await?
             }
             CommandType::Count => {
                 let opt = AggregateOptions::default();
-                let mut match_bson = Document::new();
-                match_bson.insert("$match", &bson);
+                let mut match_query = Document::new();
+                match_query.insert("$match", &query);
                 collection
-                    .aggregate(vec![match_bson, doc! {"$count": "count"}], opt)
+                    .aggregate(vec![match_query, doc! {"$count": "count"}], opt)
                     .await?
             }
         };
+
+        let mut result = DatabaseData(Vec::new());
 
         while let Some(doc) = cursor.try_next().await? {
             result.push(serde_json::to_value(doc)?);
@@ -255,5 +335,26 @@ fn resolve(value: &mut Bson) {
         }
         Bson::Document(doc) => doc.iter_mut().for_each(|(_, v)| resolve(v)),
         _ => {}
+    }
+}
+
+fn validate_query(query: &str) -> Result<Document> {
+    if query.is_empty() {
+        Ok(Document::new())
+    } else {
+        let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?
+            .replace_all(&query, "\"$1\":")
+            .to_string();
+        str_fixed = Regex::new(REGEX_TO_STRING_REGEX)?
+            .replace_all(&str_fixed, "\"/$1/\"")
+            .to_string();
+        str_fixed = Regex::new(DATE_TO_STRING_REGEX)?
+            .replace_all(&str_fixed, "\"$1\"")
+            .to_string();
+        let value: Map<String, Value> = serde_json::from_str(&str_fixed)
+            .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
+        let mut bson = Document::try_from(value)?;
+        bson.iter_mut().for_each(|(_, value)| resolve(value));
+        Ok(bson)
     }
 }
