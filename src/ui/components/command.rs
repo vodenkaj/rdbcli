@@ -61,7 +61,7 @@ impl Component for CommandComponent {
     }
 }
 
-const SWITCH_DATABASE_REGEX: &str = r#"c ([A-z0-9\-]+)"#;
+const COMMAND_REGEX: &str = r#"(.*) (.*)"#;
 
 #[async_trait]
 impl EventHandler for CommandComponent {
@@ -71,7 +71,7 @@ impl EventHandler for CommandComponent {
             EventValue::OnInput(value) => {
                 if matches!(value.mode, crate::application::Mode::Input) {
                     if !matches!(self.info.data.severity, Severity::Normal) {
-                        self.info.data = Message::default();
+                        self.info.data = Message::default()
                     }
 
                     match value.key.code {
@@ -82,20 +82,37 @@ impl EventHandler for CommandComponent {
                             self.info.data.value.pop();
                         }
                         event::KeyCode::Enter => {
-                            let database = Regex::new(SWITCH_DATABASE_REGEX)?
+                            let (command, arg0) = Regex::new(COMMAND_REGEX)?
                                 .captures(&self.info.data.value)
-                                .map(|m| anyhow::Ok(m.get(1).unwrap().as_str()))
-                                .with_context(|| {
-                                    format!("'{}' is not valid database name", self.info.data.value)
-                                })?
-                                .unwrap();
-                            pool.lock().unwrap().trigger(Event {
-                                component_id: 0,
-                                value: EventValue::OnConnection(ConnectionEvent::SwitchDatabase(
-                                    database.to_string(),
-                                )),
-                            });
-                            self.info.data.value = String::new();
+                                .map(|m| {
+                                    let command = m
+                                        .get(1)
+                                        .with_context(|| "First argument of command is missing")?
+                                        .as_str();
+                                    let arg0 = m
+                                        .get(2)
+                                        .with_context(|| "Second argument of command is missing")?
+                                        .as_str();
+                                    anyhow::Ok((command, arg0))
+                                })
+                                .with_context(|| "Invalid command")??;
+                            match command {
+                                "c" | "connect" | "use" => {
+                                    pool.lock().unwrap().trigger(Event {
+                                        component_id: 0,
+                                        value: EventValue::OnConnection(
+                                            ConnectionEvent::SwitchDatabase(arg0.to_string()),
+                                        ),
+                                    });
+                                    self.info.data.value = String::new();
+                                }
+                                _ => {
+                                    self.info.data = Message {
+                                        value: String::from("Command not found"),
+                                        severity: Severity::Error,
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
