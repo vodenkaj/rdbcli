@@ -107,7 +107,7 @@ impl Connector for MongodbConnector {
         str: &str,
         PaginationInfo { start, limit }: &PaginationInfo,
     ) -> Result<DatabaseData> {
-        let (collection_name, commands, sub_commands) = Regex::new(COMMAND_REGEX)?
+        let (collection_name, commands, mut sub_commands) = Regex::new(COMMAND_REGEX)?
             .captures(str)
             .map(|m| {
                 let collection_name = m
@@ -168,8 +168,8 @@ impl Connector for MongodbConnector {
                 }
 
                 let main_command_args = (
-                    CommandType::from_str(&args[0].clone()).unwrap(),
-                    validate_query(&args[1].clone()).unwrap(),
+                    CommandType::from_str(&args[0].clone())?,
+                    validate_query(&args[1].clone())?,
                 );
                 let sub_commands = args.chunks(2).skip(1).try_fold(Vec::new(), |mut acc, w| {
                     let query = validate_query(&w[1])?;
@@ -193,14 +193,16 @@ impl Connector for MongodbConnector {
                 opt.limit = Some(*limit as i64);
 
                 let mut return_count = false;
-                sub_commands.iter().for_each(|(cmd, query)| match cmd {
-                    SubCommandType::Count => {
-                        return_count = true;
+                while let Some((cmd, mut query)) = sub_commands.pop() {
+                    match cmd {
+                        SubCommandType::Count => {
+                            return_count = true;
+                        }
+                        SubCommandType::Sort => {
+                            opt.sort = Some(query.remove(0));
+                        }
                     }
-                    SubCommandType::Sort => {
-                        opt.sort = Some(query.clone());
-                    }
-                });
+                }
 
                 if return_count {
                     let mut match_query = Document::new();
@@ -212,12 +214,12 @@ impl Connector for MongodbConnector {
                         )
                         .await?
                 } else {
-                    collection.find(query, opt).await?
+                    collection.find(query[0].clone(), opt).await?
                 }
             }
             CommandType::Aggregate => {
                 let opt = AggregateOptions::default();
-                collection.aggregate(vec![query], opt).await?
+                collection.aggregate(query, opt).await?
             }
             CommandType::Count => {
                 let opt = AggregateOptions::default();
@@ -338,12 +340,12 @@ fn resolve(value: &mut Bson) {
     }
 }
 
-fn validate_query(query: &str) -> Result<Document> {
+fn validate_query(query: &str) -> Result<Vec<Document>> {
     if query.is_empty() {
-        Ok(Document::new())
+        Ok(vec![Document::new()])
     } else {
         let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?
-            .replace_all(&query, "\"$1\":")
+            .replace_all(query, "\"$1\":")
             .to_string();
         str_fixed = Regex::new(REGEX_TO_STRING_REGEX)?
             .replace_all(&str_fixed, "\"/$1/\"")
@@ -351,10 +353,23 @@ fn validate_query(query: &str) -> Result<Document> {
         str_fixed = Regex::new(DATE_TO_STRING_REGEX)?
             .replace_all(&str_fixed, "\"$1\"")
             .to_string();
-        let value: Map<String, Value> = serde_json::from_str(&str_fixed)
-            .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
-        let mut bson = Document::try_from(value)?;
-        bson.iter_mut().for_each(|(_, value)| resolve(value));
-        Ok(bson)
+
+        let result = if str_fixed.starts_with('[') && str_fixed.ends_with(']') {
+            let value: Vec<Map<String, Value>> = serde_json::from_str(&str_fixed)
+                .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
+            value
+        } else {
+            let value: Map<String, Value> = serde_json::from_str(&str_fixed)
+                .with_context(|| format!("'{}' is not valid mongo query!", &str_fixed))?;
+            vec![value]
+        };
+        result
+            .into_iter()
+            .map(|doc| {
+                let mut bson = Document::try_from(doc)?;
+                bson.iter_mut().for_each(|(_, value)| resolve(value));
+                Ok(bson)
+            })
+            .collect::<Result<Vec<Document>>>()
     }
 }
