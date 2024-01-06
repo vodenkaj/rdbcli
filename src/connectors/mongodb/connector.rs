@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use futures::stream::TryStreamExt;
 use mongodb::{
-    bson::{self, doc, Bson, Document},
+    bson::{self, doc, oid::ObjectId, Bson, Document},
     options::{AggregateOptions, ClientOptions, FindOptions},
     Client,
 };
@@ -53,8 +53,9 @@ pub struct MongodbConnector {
 
 const COMMAND_REGEX: &str = r#"db.([A-z0-9"]+).(.*)"#;
 const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
-const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
-const DATE_TO_STRING_REGEX: &str = r"(Date\(([A-z0-9-\/]+?)\))";
+pub const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
+pub const DATE_TO_STRING_REGEX: &str = r##"(Date\("([A-z0-9-\/]+?)"\))"##;
+pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\("([A-z0-9-\/]+?)"\))"##;
 const MAXIMUM_DOCUMENTS: usize = 1_000;
 
 #[derive(Debug)]
@@ -333,6 +334,11 @@ fn resolve(value: &mut Bson) {
                 let date = DateTime::from_timestamp(date_time.timestamp(), 0).unwrap();
                 *value =
                     mongodb::bson::Bson::DateTime(bson::DateTime::from(SystemTime::from(date)));
+            } else if let Some(result) =
+                Regex::new(OBJECT_ID_TO_STRING_REGEX).unwrap().captures(str)
+            {
+                let raw_object_id = result.get(2).unwrap().as_str().to_string();
+                *value = mongodb::bson::Bson::ObjectId(ObjectId::parse_str(raw_object_id).unwrap())
             }
         }
         Bson::Document(doc) => doc.iter_mut().for_each(|(_, v)| resolve(v)),
@@ -351,6 +357,9 @@ fn validate_query(query: &str) -> Result<Vec<Document>> {
             .replace_all(&str_fixed, "\"/$1/\"")
             .to_string();
         str_fixed = Regex::new(DATE_TO_STRING_REGEX)?
+            .replace_all(&str_fixed, "\"$1\"")
+            .to_string();
+        str_fixed = Regex::new(OBJECT_ID_TO_STRING_REGEX)?
             .replace_all(&str_fixed, "\"$1\"")
             .to_string();
 

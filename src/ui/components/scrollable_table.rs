@@ -10,7 +10,9 @@ use super::{
 use crate::{
     connectors::{
         base::{Connector, DatabaseData, PaginationInfo, TableData, LIMIT},
-        mongodb::connector::MongodbConnectorBuilder,
+        mongodb::connector::{
+            MongodbConnectorBuilder, DATE_TO_STRING_REGEX, OBJECT_ID_TO_STRING_REGEX,
+        },
     },
     managers::connection_manager::ConnectionEvent,
     systems::event_system::{Event, EventHandler, EventPool, EventValue},
@@ -18,10 +20,13 @@ use crate::{
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
-use anyhow::{Context, Ok, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event;
+use mongodb::bson::Bson;
 use ratatui::layout::Constraint;
+use regex::Regex;
 
 pub struct ScrollableTableComponent {
     info: ComponentCreateInfo<TableData<'static>>,
@@ -201,10 +206,12 @@ impl EventHandler for ScrollableTableComponent {
                         }
                         event::KeyCode::Enter => {
                             if self.data.len() > 0 {
-                                EXTERNAL_EDITOR.edit_value(&mut serde_json::to_string_pretty(
-                                    &self.data[self.state.get_vertical_select() - 1
-                                        + self.state.get_vertical_offset()],
-                                )?)?;
+                                let mut data = self.data[self.state.get_vertical_select() - 1
+                                    + self.state.get_vertical_offset()]
+                                .clone();
+                                resolve(&mut data);
+                                EXTERNAL_EDITOR
+                                    .edit_value(&mut serde_json::to_string_pretty(&data)?)?;
                             }
                         }
                         _ => {}
@@ -219,5 +226,48 @@ impl EventHandler for ScrollableTableComponent {
             _ => {}
         }
         Ok(())
+    }
+}
+
+fn resolve(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(str) => {
+            if let Some(result) = Regex::new(DATE_TO_STRING_REGEX).unwrap().captures(str) {
+                let raw_date = result.get(2).unwrap().as_str().to_string();
+
+                let date_time = match NaiveDate::parse_from_str(&raw_date, "%Y-%m-%d") {
+                    Ok(parsed_date) => {
+                        // Create a NaiveDateTime at midnight for the given date
+                        NaiveDateTime::new(
+                            parsed_date,
+                            NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
+                        )
+                    }
+                    Err(e) => {
+                        panic!("Failed to parse date: {}", e);
+                    }
+                };
+
+                let date = DateTime::from_timestamp(date_time.timestamp(), 0).unwrap();
+                *value = serde_json::from_str(&date.to_rfc3339()).unwrap();
+            } else if let Some(result) =
+                Regex::new(OBJECT_ID_TO_STRING_REGEX).unwrap().captures(str)
+            {
+                let raw_object_id = result.get(2).unwrap().as_str().to_string();
+                *value = serde_json::from_str(&raw_object_id).unwrap();
+            }
+        }
+        serde_json::Value::Array(array) => array.iter_mut().for_each(resolve),
+        serde_json::Value::Object(obj) => obj.values_mut().for_each(|v| {
+            if v.is_object() {
+                let bson = Bson::try_from(v.clone()).unwrap();
+                if let Some(date) = bson.as_datetime() {
+                    *v = serde_json::Value::String(date.try_to_rfc3339_string().unwrap());
+                } else {
+                    resolve(v);
+                }
+            }
+        }),
+        _ => {}
     }
 }
