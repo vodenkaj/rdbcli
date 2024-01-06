@@ -64,6 +64,12 @@ impl ScrollableTableComponent {
         }
     }
 
+    pub fn reset_state(&mut self) {
+        self.state.reset();
+        self.horizontal_offset = 0;
+        self.vertical_offset = 0;
+    }
+
     pub fn set_connector(&mut self, conn: Box<dyn Connector>) {
         // TODO: This is ugly, the get_table_layout fn should instead accept builder struct
         self.connector = Some(conn);
@@ -108,6 +114,8 @@ impl ScrollableTableComponent {
             self.vertical_offset = 1;
             self.pagination.start += LIMIT - 1;
             self.state.reset();
+            self.state
+                .set_horizontal_offset(self.horizontal_offset as usize);
             self.refetch_data().await.unwrap();
         }
         if offset == 1
@@ -135,7 +143,49 @@ impl ScrollableTableComponent {
         self.info.data = TableData::from(self.data.clone());
         self.horizontal_offset_max = self.info.data.header.cells.len() as i32 - 1;
         self.vertical_offset_max = self.info.data.rows.len() as i32;
+        // TODO: We should keep order of the fields between refteches
+        self.calculate_cell_widths();
         Ok(())
+    }
+
+    fn calculate_cell_widths(&mut self) {
+        self.state.cell_widths = self
+            .info
+            .data
+            .header
+            .cells
+            .iter()
+            .enumerate()
+            .map(|(idx, cell)| {
+                if self.info.data.header.cells.len() - 1 == idx {
+                    // Last cell should take rest of the remaining space
+                    return u16::MAX;
+                }
+                let value_widths = self
+                    .info
+                    .data
+                    .rows
+                    .iter()
+                    .map(|r| r.cells[idx].content.width() as u16)
+                    .collect::<Vec<_>>();
+
+                let mut cell_width: u16 = 0;
+                let mut size = 0;
+                for width in value_widths.iter() {
+                    if width >= &100 {
+                        continue;
+                    }
+                    if let Some(value) = cell_width.checked_add(*width) {
+                        cell_width = value;
+                        size += 1;
+                    }
+                }
+                let cell_avg_width = cell_width.checked_div(size).unwrap_or(0);
+                let header_cell_width = cmp::min(cell.content.width(), 30) as u16;
+
+                cmp::max(header_cell_width, cell_avg_width)
+            })
+            .collect::<Vec<_>>();
     }
 }
 
@@ -187,6 +237,8 @@ impl EventHandler for ScrollableTableComponent {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
                             EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
+                            self.reset_state();
+                            self.pagination.reset();
                             self.refetch_data().await?;
                             value.terminal.lock().unwrap().clear()?;
                         }

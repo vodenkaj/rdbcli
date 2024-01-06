@@ -54,8 +54,9 @@ pub struct MongodbConnector {
 const COMMAND_REGEX: &str = r#"db.([A-z0-9"]+).(.*)"#;
 const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
 pub const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
-pub const DATE_TO_STRING_REGEX: &str = r##"(Date\("([A-z0-9-\/]+?)"\))"##;
-pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\("([A-z0-9-\/]+?)"\))"##;
+// TODO: Replace these regexes
+pub const DATE_TO_STRING_REGEX: &str = r##"(Date\(([A-z0-9-\/]+?)\))"##;
+pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\(([A-z0-9-\/]+?)\))"##;
 const MAXIMUM_DOCUMENTS: u32 = 100;
 
 #[derive(Debug)]
@@ -267,6 +268,8 @@ impl<'a> From<Arc<DatabaseData>> for TableData<'a> {
                                         let bson = Bson::try_from(v.clone()).unwrap();
                                         if let Some(date) = bson.as_datetime() {
                                             date.try_to_rfc3339_string().unwrap()
+                                        } else if let Some(object_id) = bson.as_object_id() {
+                                            object_id.to_hex()
                                         } else {
                                             value.to_string()
                                         }

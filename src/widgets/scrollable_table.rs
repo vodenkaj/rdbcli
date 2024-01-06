@@ -1,4 +1,4 @@
-use std::cmp;
+use std::{cmp, u16};
 
 use ratatui::{
     prelude::{Buffer, Rect},
@@ -9,7 +9,7 @@ use ratatui::{
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Cell<'a> {
-    content: Text<'a>,
+    pub content: Text<'a>,
     style: Style,
 }
 
@@ -64,6 +64,7 @@ pub struct ScrollableTableState {
     horizontal_offset: usize,
     vertical_offset: usize,
     vertical_select: usize,
+    pub cell_widths: Vec<u16>,
 }
 
 impl ScrollableTableState {
@@ -120,6 +121,7 @@ impl Default for ScrollableTableState {
             horizontal_offset: 0,
             vertical_offset: 0,
             vertical_select: 1,
+            cell_widths: Vec::new(),
         }
     }
 }
@@ -170,24 +172,34 @@ impl<'a> StatefulWidget for ScrollableTable<'a> {
         }
     }
 }
-fn render_row<'a>(row: &Row<'a>, area: Rect, buf: &mut Buffer, state: &ScrollableTableState) {
+fn render_row(row: &Row<'_>, area: Rect, buf: &mut Buffer, state: &ScrollableTableState) {
     let style = match state.vertical_select > 0 && area.y as usize == state.vertical_select {
         true => Style::default().bg(Color::Yellow).fg(Color::Black),
         false => Style::default(),
     };
     buf.set_style(area, style);
-    for (x, cell) in row
-        .cells
-        .iter()
-        .skip(state.horizontal_offset)
-        .enumerate()
-        .take((area.width / 10) as usize)
-    {
+
+    if state.cell_widths.is_empty() {
+        return;
+    }
+
+    let mut width_occupied: u16 = 0;
+    for (x, cell) in row.cells.iter().enumerate().skip(state.horizontal_offset) {
+        let cell_width = cmp::min(
+            state.cell_widths[x].saturating_add(1),
+            area.width.checked_sub(width_occupied).unwrap_or(area.width),
+        );
+        width_occupied += cell_width;
+
+        if width_occupied > area.width {
+            break;
+        }
+
         for (i, line) in cell.content.lines.iter().enumerate() {
             let area = Rect {
-                x: (10 * x) as u16,
+                x: width_occupied - cell_width,
                 y: area.y + i as u16,
-                width: 9,
+                width: cell_width.saturating_sub(1),
                 height: row.total_height(),
             };
             buf.set_style(area, cell.style);

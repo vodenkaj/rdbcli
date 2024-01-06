@@ -46,6 +46,13 @@ pub struct PaginationInfo {
     pub limit: u64,
 }
 
+impl PaginationInfo {
+    pub fn reset(&mut self) {
+        self.limit = 0;
+        self.start = 0;
+    }
+}
+
 pub const LIMIT: u64 = 100;
 
 #[async_trait]
