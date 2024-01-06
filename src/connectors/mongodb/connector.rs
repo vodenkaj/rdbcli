@@ -121,59 +121,35 @@ impl Connector for MongodbConnector {
                     .context("Did not find command type in the query")?
                     .as_str();
 
-                let mut inside_str = false;
-                let mut args = Vec::new();
-                let mut command = String::new();
-                let mut brackets = Vec::new();
-                let chars: Vec<char> = raw_command.chars().collect();
-                for (idx, ch) in chars.iter().cloned().enumerate() {
-                    command += &ch.to_string();
-                    let is_escaped = if idx > 0 {
-                        chars[idx - 1] == '\\'
-                    } else {
-                        false
-                    };
-                    match ch {
-                        '(' => {
-                            if !inside_str && !is_escaped {
-                                if brackets.is_empty() {
-                                    command.pop();
-                                    args.push(command.to_string());
-                                    command.clear();
-                                }
-                                brackets.push(ch);
-                            }
-                        }
-                        ')' => {
-                            if !inside_str && !is_escaped {
-                                brackets.pop();
-                                if brackets.is_empty() {
-                                    command.pop();
-                                    args.push(command.to_string());
-                                    command.clear();
-                                }
-                            }
-                        }
-                        '"' | '\'' => {
-                            if !is_escaped {
-                                inside_str = !inside_str;
-                            }
-                        }
-                        '.' => {
-                            if brackets.is_empty() {
-                                command.clear();
-                            };
-                        }
-                        _ => {}
-                    }
-                }
+                let args = collect_str_inside_brackets(
+                    raw_command,
+                    ParseOptions {
+                        opening_brackets: '(',
+                        closing_brackets: ')',
+                        arg_on_opening_brackets: true,
+                    },
+                );
+                let main_command_type = CommandType::from_str(&args[0].clone())?;
+                let main_command_args = if matches!(main_command_type, CommandType::Find) {
+                    collect_str_inside_brackets(
+                        args[1].as_str(),
+                        ParseOptions {
+                            opening_brackets: '{',
+                            closing_brackets: '}',
+                            arg_on_opening_brackets: false,
+                        },
+                    )
+                } else {
+                    vec![args[1].clone(), String::new()]
+                };
 
                 let main_command_args = (
-                    CommandType::from_str(&args[0].clone())?,
-                    validate_query(&args[1].clone())?,
+                    main_command_type,
+                    validate_query(main_command_args.get(0))?,
+                    validate_query(main_command_args.get(1))?,
                 );
                 let sub_commands = args.chunks(2).skip(1).try_fold(Vec::new(), |mut acc, w| {
-                    let query = validate_query(&w[1])?;
+                    let query = validate_query(w.get(1))?;
                     let command = SubCommandType::from_str(&w[0])?;
                     acc.push((command, query));
                     anyhow::Ok(acc)
@@ -185,13 +161,14 @@ impl Connector for MongodbConnector {
         let db = self.client.database(&self.database);
         let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
-        let (command_type, query) = commands;
+        let (command_type, query, projection) = commands;
 
         let mut cursor = match command_type {
             CommandType::Find => {
                 let mut opt = FindOptions::default();
                 opt.skip = Some(*start);
                 opt.limit = Some(*limit as i64);
+                opt.projection = projection.get(0).cloned();
 
                 let mut return_count = false;
                 while let Some((cmd, mut query)) = sub_commands.pop() {
@@ -346,10 +323,11 @@ fn resolve(value: &mut Bson) {
     }
 }
 
-fn validate_query(query: &str) -> Result<Vec<Document>> {
-    if query.is_empty() {
-        Ok(vec![Document::new()])
-    } else {
+fn validate_query(query: Option<&String>) -> Result<Vec<Document>> {
+    if let Some(query) = query {
+        if query.is_empty() {
+            return Ok(vec![Document::new()]);
+        }
         let mut str_fixed = Regex::new(KEY_TO_STRING_REGEX)?
             .replace_all(query, "\"$1\":")
             .to_string();
@@ -380,5 +358,66 @@ fn validate_query(query: &str) -> Result<Vec<Document>> {
                 Ok(bson)
             })
             .collect::<Result<Vec<Document>>>()
+    } else {
+        Ok(vec![Document::new()])
     }
+}
+
+struct ParseOptions {
+    opening_brackets: char,
+    closing_brackets: char,
+    arg_on_opening_brackets: bool,
+}
+
+fn collect_str_inside_brackets(raw_command: &str, opts: ParseOptions) -> Vec<String> {
+    let mut inside_str = false;
+    let mut args = Vec::new();
+    let mut command = String::new();
+    let mut brackets = Vec::new();
+    let chars: Vec<char> = raw_command.chars().collect();
+    for (idx, ch) in chars.iter().cloned().enumerate() {
+        command += &ch.to_string();
+        let is_escaped = if idx > 0 {
+            chars[idx - 1] == '\\'
+        } else {
+            false
+        };
+        match ch {
+            opening_char if opts.opening_brackets == opening_char => {
+                if !inside_str && !is_escaped {
+                    if brackets.is_empty() && opts.arg_on_opening_brackets {
+                        command.pop();
+                        args.push(command.to_string());
+                        command.clear();
+                    }
+                    brackets.push(ch);
+                }
+            }
+            closing_char if opts.closing_brackets == closing_char => {
+                if !inside_str && !is_escaped {
+                    brackets.pop();
+                    if brackets.is_empty() {
+                        if opts.arg_on_opening_brackets {
+                            command.pop();
+                        }
+                        args.push(command.to_string());
+                        command.clear();
+                    }
+                }
+            }
+            '"' | '\'' => {
+                if !is_escaped {
+                    inside_str = !inside_str;
+                }
+            }
+            '.' | ',' | ' ' => {
+                if brackets.is_empty() {
+                    command.clear();
+                };
+            }
+            _ => {}
+        }
+    }
+
+    args
 }
