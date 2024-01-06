@@ -5,7 +5,6 @@ use crate::{
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
-use futures::stream::TryStreamExt;
 use mongodb::{
     bson::{self, doc, oid::ObjectId, Bson, Document},
     options::{AggregateOptions, ClientOptions, FindOptions},
@@ -18,6 +17,7 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
+use tokio_stream::StreamExt;
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -56,7 +56,7 @@ const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
 pub const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
 pub const DATE_TO_STRING_REGEX: &str = r##"(Date\("([A-z0-9-\/]+?)"\))"##;
 pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\("([A-z0-9-\/]+?)"\))"##;
-const MAXIMUM_DOCUMENTS: usize = 1_000;
+const MAXIMUM_DOCUMENTS: u32 = 100;
 
 #[derive(Debug)]
 enum CommandType {
@@ -161,7 +161,7 @@ impl Connector for MongodbConnector {
         let db = self.client.database(&self.database);
         let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
-        let (command_type, query, projection) = commands;
+        let (command_type, mut query, projection) = commands;
 
         let mut cursor = match command_type {
             CommandType::Find => {
@@ -184,11 +184,11 @@ impl Connector for MongodbConnector {
 
                 if return_count {
                     let mut match_query = Document::new();
-                    match_query.insert("$match", &query);
+                    match_query.insert("$match", query.get(0));
                     collection
                         .aggregate(
                             vec![match_query, doc! {"$count": "count"}],
-                            AggregateOptions::default(),
+                            AggregateOptions::builder().build(),
                         )
                         .await?
                 } else {
@@ -196,13 +196,19 @@ impl Connector for MongodbConnector {
                 }
             }
             CommandType::Aggregate => {
-                let opt = AggregateOptions::default();
+                let opt = AggregateOptions::builder().build();
+                query.append(&mut vec![
+                    doc! {"$skip": *start as i32},
+                    doc! {
+                    "$limit": *limit as i32
+                    },
+                ]);
                 collection.aggregate(query, opt).await?
             }
             CommandType::Count => {
                 let opt = AggregateOptions::default();
                 let mut match_query = Document::new();
-                match_query.insert("$match", &query);
+                match_query.insert("$match", query.get(0));
                 collection
                     .aggregate(vec![match_query, doc! {"$count": "count"}], opt)
                     .await?
@@ -213,7 +219,7 @@ impl Connector for MongodbConnector {
 
         while let Some(doc) = cursor.try_next().await? {
             result.push(serde_json::to_value(doc)?);
-            if result.len() >= MAXIMUM_DOCUMENTS {
+            if result.len() >= MAXIMUM_DOCUMENTS as usize {
                 break;
             }
         }
