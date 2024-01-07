@@ -2,7 +2,6 @@ use std::{
     cmp,
     sync::{Arc, Mutex},
 };
-
 use super::{
     base::{Component, ComponentCreateInfo, ComponentDrawInfo},
     command::{Message, Severity},
@@ -236,7 +235,11 @@ impl EventHandler for ScrollableTableComponent {
                 if matches!(value.mode, crate::application::Mode::View) {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
+                            let original_query = self.query.clone();
                             EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
+                            if original_query == self.query {
+                                return Ok(())
+                            }
                             self.reset_state();
                             self.pagination.reset();
                             self.refetch_data().await?;

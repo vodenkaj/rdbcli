@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-
 use crate::systems::event_system::{Event, EventHandler, EventPool};
 use anyhow::Result;
 use async_trait::async_trait;

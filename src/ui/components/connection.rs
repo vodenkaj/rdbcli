@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-
 use anyhow::{Ok, Result};
 use async_trait::async_trait;
 use crossterm::event;
