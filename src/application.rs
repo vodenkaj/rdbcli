@@ -36,7 +36,7 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Arc<Mutex<Self>> {
+    pub fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Arc<Mutex<Self>> {
         let auth_manager = Arc::new(Mutex::new(AuthManager::new()));
         let connection_manager = Arc::new(Mutex::new(ConnectionManager::new()));
         Arc::new(Mutex::new(Self {
@@ -46,7 +46,7 @@ impl App {
             window_manager: WindowManagerBuilder::new()
                 //.with_window(get_login_layout())
                 //.with_window(get_connections_layout(auth_manager.clone()))
-                .with_window(get_table_layout().await)
+                .with_window(get_table_layout())
                 .build(auth_manager.clone()),
             terminal: Arc::new(Mutex::new(terminal)),
             auth_manager,
@@ -78,7 +78,7 @@ impl App {
         }
     }
 
-    pub async fn render(&mut self) {
+    pub fn render(&mut self) {
         self.window_manager
             .lock()
             .unwrap()
@@ -91,7 +91,7 @@ impl App {
             })
     }
 
-    pub async fn on_key(&mut self, key: event::KeyEvent) {
+    pub fn on_key(&mut self, key: event::KeyEvent) {
         let event_manager;
         let focused;
         {

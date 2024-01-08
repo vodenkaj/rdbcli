@@ -1,8 +1,7 @@
-use std::sync::{Arc, Mutex};
 use crate::systems::event_system::{Event, EventHandler, EventPool};
 use anyhow::Result;
-use async_trait::async_trait;
 use ratatui::widgets::Paragraph;
+use std::sync::{Arc, Mutex};
 
 use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 
@@ -35,9 +34,8 @@ impl Component for ParagraphComponent {
     }
 }
 
-#[async_trait]
 impl EventHandler for ParagraphComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         Ok(())
     }
 }

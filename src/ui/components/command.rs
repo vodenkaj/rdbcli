@@ -4,7 +4,6 @@ use crate::{
     systems::event_system::{Event, EventHandler, EventPool, EventValue},
 };
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use crossterm::event;
 use ratatui::{style::Style, widgets::Paragraph};
 use regex::Regex;
@@ -63,9 +62,8 @@ impl Component for CommandComponent {
 
 const COMMAND_REGEX: &str = r#"(.*) (.*)"#;
 
-#[async_trait]
 impl EventHandler for CommandComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         match &event.value {
             EventValue::OnMessage(value) => self.info.data = value.clone(),
             EventValue::OnInput(value) => {

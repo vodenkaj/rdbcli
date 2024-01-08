@@ -4,7 +4,6 @@ use super::{
         command::{CommandComponent, Message},
         connection::{ConnectionComponent, ConnectionInfo},
         connection_list::ConnectionListComponent,
-        input::InputComponent,
         login::LoginComponent,
         paragraph::ParagraphComponent,
         scrollable_table::ScrollableTableComponent,
@@ -12,15 +11,13 @@ use super::{
     window::{Window, WindowBuilder},
 };
 use crate::{
-    connectors::{
-        base::TableData,
-        mongodb::connector::{MongodbConnector, MongodbConnectorBuilder},
-    },
+    connectors::{base::TableData, mongodb::connector::MongodbConnectorBuilder},
     managers::auth_manager::AuthManager,
     systems::event_system::{EventManager, EventType},
     widgets::scrollable_table::ScrollableTableState,
 };
 use crossterm::event;
+use futures::executor::block_on;
 use ratatui::layout::Constraint;
 use std::{
     env,
@@ -30,7 +27,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub async fn get_table_layout() -> Arc<Mutex<Window>> {
+pub fn get_table_layout() -> Arc<Mutex<Window>> {
     let event_manager = EventManager::new();
     let mut events = event_manager.lock().unwrap();
     let (_, db_uri) = env::vars()
@@ -38,17 +35,11 @@ pub async fn get_table_layout() -> Arc<Mutex<Window>> {
         .expect("DB_URI to be present");
 
     let connector = if db_uri.contains("mongodb") {
-        MongodbConnectorBuilder::new(&db_uri)
-            .build()
-            .await
-            .expect("Mongodb connector to be build")
+        block_on(MongodbConnectorBuilder::new(&db_uri).build())
     } else {
-        //TODO: POSTGRES
-        MongodbConnectorBuilder::new(&db_uri)
-            .build()
-            .await
-            .expect("Mongodb connector to be build")
-    };
+        panic!("Other connectors are not implemented");
+    }
+    .expect("Failed to create DB connector");
 
     let table = Arc::new(Mutex::new(ScrollableTableComponent::new(
         ComponentCreateInfo {

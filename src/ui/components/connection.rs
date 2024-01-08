@@ -1,6 +1,4 @@
-use std::sync::{Arc, Mutex};
 use anyhow::{Ok, Result};
-use async_trait::async_trait;
 use crossterm::event;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -8,6 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+use std::sync::{Arc, Mutex};
 
 use crate::{
     managers::{connection_manager::ConnectionEvent, window_manager::WindowCommand},
@@ -104,9 +103,8 @@ impl Component for ConnectionComponent {
     }
 }
 
-#[async_trait]
 impl EventHandler for ConnectionComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnInput(value) = &event.value {
             match self.focused {
                 FocusedInput::Type => match value.key.code {

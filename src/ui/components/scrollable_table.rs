@@ -1,7 +1,3 @@
-use std::{
-    cmp,
-    sync::{Arc, Mutex},
-};
 use super::{
     base::{Component, ComponentCreateInfo, ComponentDrawInfo},
     command::{Message, Severity},
@@ -20,12 +16,16 @@ use crate::{
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event;
+use futures::executor::block_on;
 use mongodb::bson::Bson;
 use ratatui::layout::Constraint;
 use regex::Regex;
+use std::{
+    cmp,
+    sync::{Arc, Mutex},
+};
 
 pub struct ScrollableTableComponent {
     info: ComponentCreateInfo<TableData<'static>>,
@@ -89,7 +89,7 @@ impl ScrollableTableComponent {
             .set_horizontal_offset(self.horizontal_offset as usize);
     }
 
-    pub async fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
+    pub fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
         // TODO: Does not work, fix this :)
         match dir {
             VerticalDirection::Down => {
@@ -115,7 +115,7 @@ impl ScrollableTableComponent {
             self.state.reset();
             self.state
                 .set_horizontal_offset(self.horizontal_offset as usize);
-            self.refetch_data().await.unwrap();
+            block_on(async { self.refetch_data().await.unwrap() });
         }
         if offset == 1
             && matches!(dir, VerticalDirection::Up)
@@ -127,7 +127,7 @@ impl ScrollableTableComponent {
                 .set_vertical_offset((self.vertical_offset - 10) as usize);
             self.state.set_vertical_select(10);
             self.pagination.start -= LIMIT - 1;
-            self.refetch_data().await.unwrap();
+            block_on(async { self.refetch_data().await.unwrap() });
         }
     }
 
@@ -211,14 +211,13 @@ impl Component for ScrollableTableComponent {
     }
 }
 
-#[async_trait]
 impl EventHandler for ScrollableTableComponent {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         match &event.value {
             EventValue::OnConnection(value) => match value {
-                ConnectionEvent::Connect(value) => self.set_connector(Box::new(
-                    MongodbConnectorBuilder::new(&value.uri).build().await?,
-                )),
+                ConnectionEvent::Connect(value) => self.set_connector(Box::new(block_on(async {
+                    MongodbConnectorBuilder::new(&value.uri).build().await
+                })?)),
                 ConnectionEvent::SwitchDatabase(value) => {
                     self.connector.as_mut().unwrap().set_database(value);
                     pool.lock().unwrap().trigger(Event {
@@ -238,11 +237,11 @@ impl EventHandler for ScrollableTableComponent {
                             let original_query = self.query.clone();
                             EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
                             if original_query == self.query {
-                                return Ok(())
+                                return Ok(());
                             }
                             self.reset_state();
                             self.pagination.reset();
-                            self.refetch_data().await?;
+                            block_on(async { self.refetch_data().await })?;
                             value.terminal.lock().unwrap().clear()?;
                         }
                         event::KeyCode::Left | event::KeyCode::Char('h') => {
@@ -253,11 +252,9 @@ impl EventHandler for ScrollableTableComponent {
                         }
                         event::KeyCode::Down | event::KeyCode::Char('j') => {
                             self.handle_next_vertical_movement(VerticalDirection::Down)
-                                .await;
                         }
                         event::KeyCode::Up | event::KeyCode::Char('k') => {
                             self.handle_next_vertical_movement(VerticalDirection::Up)
-                                .await;
                         }
                         event::KeyCode::Enter => {
                             if self.data.len() > 0 {

@@ -4,7 +4,6 @@ use crate::{
     ui::window::Window,
 };
 use anyhow::Result;
-use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -26,9 +25,8 @@ impl WindowManager {
     }
 }
 
-#[async_trait]
 impl EventHandler for WindowManager {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnWindowCommand(cmd) = &event.value {
             match cmd {
                 WindowCommand::SetFocusedWindow(value) => {

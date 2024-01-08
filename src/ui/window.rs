@@ -5,7 +5,6 @@ use crate::{
     systems::event_system::{Event, EventHandler, EventManager, EventPool, EventValue},
 };
 use anyhow::Result;
-use async_trait::async_trait;
 use crossterm::event;
 use ratatui::{
     backend::CrosstermBackend,
@@ -28,9 +27,8 @@ pub struct WindowBuilder {
     keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Window) + Send + Sync>>,
 }
 
-#[async_trait]
 impl EventHandler for Window {
-    async fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
         if let EventValue::OnInput(value) = &event.value {
             match value.key.code {
                 event::KeyCode::Char(ch) => {
@@ -83,7 +81,11 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn with_keybind(&mut self, bind: event::KeyCode, action: Box<dyn Fn(&mut Self) + Send + Sync>) {
+    pub fn with_keybind(
+        &mut self,
+        bind: event::KeyCode,
+        action: Box<dyn Fn(&mut Self) + Send + Sync>,
+    ) {
         self.keybinds.insert(bind, action);
     }
 

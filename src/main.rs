@@ -19,15 +19,15 @@ async fn main() {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
     let backend = CrosstermBackend::new(stdout);
     let term = Terminal::new(backend).unwrap();
-    let app = App::new(term).await;
+    let app = App::new(term);
 
     loop {
         let mut handle = app.lock().unwrap();
-        handle.render().await;
+        handle.render();
 
         if event::poll(Duration::from_secs(0)).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
-                handle.on_key(key).await;
+                handle.on_key(key);
             }
         }
 
