@@ -7,12 +7,9 @@ use crate::{
     ui::{components::command::Message, window::OnInputInfo},
 };
 use anyhow::Result;
-use core::time;
-use futures::executor::block_on;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    thread,
 };
 
 pub struct Event {
@@ -82,17 +79,10 @@ pub trait EventHandler: Send {
 
 impl EventManager {
     pub fn new() -> Arc<Mutex<Self>> {
-        let manager = Arc::new(Mutex::new(Self::default()));
-        let cloned = manager.clone();
-        thread::spawn(move || loop {
-            cloned.lock().expect("Event manager to be poisoned").pool();
-            thread::sleep(time::Duration::from_millis(10));
-        });
-
-        manager
+        Arc::new(Mutex::new(Self::default()))
     }
 
-    fn pool(&mut self) {
+    pub fn pool(&mut self) {
         let events;
         {
             let mut guard = self.pool.lock().unwrap();

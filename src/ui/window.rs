@@ -90,6 +90,8 @@ impl Window {
     }
 
     pub fn render(&mut self, info: WindowRenderInfo) {
+        self.event_manager.lock().unwrap().pool();
+
         info.terminal
             .lock()
             .unwrap()
