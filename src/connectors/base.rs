@@ -41,6 +41,7 @@ impl DerefMut for DatabaseData {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct PaginationInfo {
     pub start: u64,
     pub limit: u64,
@@ -58,6 +59,6 @@ pub const LIMIT: u64 = 100;
 #[async_trait]
 pub trait Connector: Send + Sync {
     async fn get_info(&self) -> &ConnectorInfo;
-    async fn get_data(&self, query: &str, pagination: &PaginationInfo) -> Result<DatabaseData>;
+    async fn get_data(&self, query: String, pagination: PaginationInfo) -> Result<DatabaseData>;
     fn set_database(&mut self, database: &str);
 }

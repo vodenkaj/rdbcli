@@ -15,24 +15,24 @@ use crate::{
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event;
 use futures::executor::block_on;
 use mongodb::bson::Bson;
-use ratatui::layout::Constraint;
+use rand::Rng;
+use ratatui::{layout::Constraint, widgets::Paragraph};
 use regex::Regex;
-use std::{
-    cmp,
-    sync::{Arc, Mutex},
-};
+use std::{cmp, sync::Arc};
+use tokio::sync::Mutex;
 
 pub struct ScrollableTableComponent {
     info: ComponentCreateInfo<TableData<'static>>,
     data: Arc<DatabaseData>,
+    next_data: Option<tokio::task::JoinHandle<anyhow::Result<DatabaseData>>>,
     state: ScrollableTableState,
     query: String,
-    connector: Option<Box<dyn Connector>>,
+    connector: Arc<Mutex<dyn Connector>>,
     horizontal_offset: i32,
     vertical_offset: i32,
     horizontal_offset_max: i32,
@@ -44,14 +44,15 @@ impl ScrollableTableComponent {
     pub fn new(
         info: ComponentCreateInfo<TableData<'static>>,
         state: ScrollableTableState,
-        conn: Box<dyn Connector>,
+        conn: Arc<Mutex<dyn Connector>>,
     ) -> Self {
         Self {
             query: String::new(),
             data: Arc::new(DatabaseData(Vec::new())),
+            next_data: None,
             info,
             state,
-            connector: Some(conn),
+            connector: conn,
             horizontal_offset: 0,
             vertical_offset: 0,
             horizontal_offset_max: 0,
@@ -69,9 +70,9 @@ impl ScrollableTableComponent {
         self.vertical_offset = 0;
     }
 
-    pub fn set_connector(&mut self, conn: Box<dyn Connector>) {
+    pub fn set_connector(&mut self, conn: Arc<Mutex<dyn Connector>>) {
         // TODO: This is ugly, the get_table_layout fn should instead accept builder struct
-        self.connector = Some(conn);
+        self.connector = conn;
     }
 
     pub fn handle_next_horizontal_movement(&mut self, dir: HorizontalDirection) {
@@ -87,6 +88,18 @@ impl ScrollableTableComponent {
 
         self.state
             .set_horizontal_offset(self.horizontal_offset as usize);
+    }
+
+    pub fn spawn_next_data(&mut self) {
+        let (cloned_conn, cloned_query, cloned_pagination) =
+            (self.connector.clone(), self.query.clone(), self.pagination);
+        self.next_data = Some(tokio::spawn(async move {
+            cloned_conn
+                .lock()
+                .await
+                .get_data(cloned_query, cloned_pagination)
+                .await
+        }));
     }
 
     pub fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
@@ -115,7 +128,7 @@ impl ScrollableTableComponent {
             self.state.reset();
             self.state
                 .set_horizontal_offset(self.horizontal_offset as usize);
-            block_on(async { self.refetch_data().await.unwrap() });
+            self.spawn_next_data();
         }
         if offset == 1
             && matches!(dir, VerticalDirection::Up)
@@ -127,18 +140,12 @@ impl ScrollableTableComponent {
                 .set_vertical_offset((self.vertical_offset - 10) as usize);
             self.state.set_vertical_select(10);
             self.pagination.start -= LIMIT - 1;
-            block_on(async { self.refetch_data().await.unwrap() });
+            self.spawn_next_data();
         }
     }
 
-    async fn refetch_data(&mut self) -> anyhow::Result<()> {
-        let data = self
-            .connector
-            .as_ref()
-            .with_context(|| "Connector must be initilized")?
-            .get_data(&self.query, &self.pagination)
-            .await?;
-        self.data = Arc::new(data);
+    fn set_data(&mut self, data: Result<DatabaseData>) -> anyhow::Result<()> {
+        self.data = Arc::new(data?);
         self.info.data = TableData::from(self.data.clone());
         self.horizontal_offset_max = self.info.data.header.cells.len() as i32 - 1;
         self.vertical_offset_max = self.info.data.rows.len() as i32;
@@ -199,11 +206,33 @@ impl Component for ScrollableTableComponent {
     }
 
     fn draw(&mut self, info: ComponentDrawInfo) {
-        info.frame.render_stateful_widget(
-            ScrollableTable::new(self.info.data.rows.clone(), self.info.data.header.clone()),
-            info.area,
-            &mut self.state,
-        );
+        match self.next_data.as_mut() {
+            // TODO: Refactor this
+            Some(value) => {
+                if value.is_finished() {
+                    let result = block_on(value).unwrap();
+                    self.set_data(result);
+                    self.next_data = None;
+                }
+                let random_state: String = (0..rand::thread_rng().gen_range(0..3))
+                    .map(|_| ".")
+                    .collect();
+                info.frame.render_widget(
+                    Paragraph::new(format!("Quering{}", random_state)),
+                    info.area,
+                )
+            }
+            None => {
+                info.frame.render_stateful_widget(
+                    ScrollableTable::new(
+                        self.info.data.rows.clone(),
+                        self.info.data.header.clone(),
+                    ),
+                    info.area,
+                    &mut self.state,
+                );
+            }
+        }
     }
 
     fn get_constraint(&self) -> Constraint {
@@ -212,14 +241,16 @@ impl Component for ScrollableTableComponent {
 }
 
 impl EventHandler for ScrollableTableComponent {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, (event, pool): (&Event, Arc<std::sync::Mutex<EventPool>>)) -> Result<()> {
         match &event.value {
             EventValue::OnConnection(value) => match value {
-                ConnectionEvent::Connect(value) => self.set_connector(Box::new(block_on(async {
-                    MongodbConnectorBuilder::new(&value.uri).build().await
-                })?)),
+                ConnectionEvent::Connect(value) => {
+                    self.set_connector(Arc::new(Mutex::new(block_on(async {
+                        MongodbConnectorBuilder::new(&value.uri).build().await
+                    })?)))
+                }
                 ConnectionEvent::SwitchDatabase(value) => {
-                    self.connector.as_mut().unwrap().set_database(value);
+                    block_on(async { self.connector.lock().await.set_database(value) });
                     pool.lock().unwrap().trigger(Event {
                         component_id: 0,
                         value: EventValue::OnMessage(Message {
@@ -241,7 +272,7 @@ impl EventHandler for ScrollableTableComponent {
                             }
                             self.reset_state();
                             self.pagination.reset();
-                            block_on(async { self.refetch_data().await })?;
+                            self.spawn_next_data();
                             value.terminal.lock().unwrap().clear()?;
                         }
                         event::KeyCode::Left | event::KeyCode::Char('h') => {

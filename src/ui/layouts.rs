@@ -50,7 +50,7 @@ pub fn get_table_layout() -> Arc<Mutex<Window>> {
             visible: true,
         },
         ScrollableTableState::default(),
-        Box::new(connector),
+        Arc::new(tokio::sync::Mutex::new(connector)),
     )));
     events.subscribe(table.clone(), EventType::OnConnection);
     events.subscribe(table.clone(), EventType::DatabaseData);

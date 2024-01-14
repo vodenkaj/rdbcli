@@ -73,7 +73,7 @@ pub struct EventManager {
     pub pool: Arc<Mutex<EventPool>>,
 }
 
-pub trait EventHandler: Send {
+pub trait EventHandler: Send + Sync {
     fn on_event(&mut self, event: (&Event, Arc<Mutex<EventPool>>)) -> Result<()>;
 }
 

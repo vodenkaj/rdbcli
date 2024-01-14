@@ -1472,6 +1472,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "pam-client",
+ "rand",
  "ratatui",
  "rcgen",
  "regex",

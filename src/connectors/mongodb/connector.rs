@@ -1,4 +1,4 @@
-use super::parser::{CommandQuery, CommandQueryPair, ParsedValue, parse_mongo_query};
+use super::parser::{parse_mongo_query, CommandQuery, CommandQueryPair, ParsedValue};
 use crate::{
     connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
     widgets::scrollable_table::Row,
@@ -115,10 +115,10 @@ impl Connector for MongodbConnector {
 
     async fn get_data(
         &self,
-        str: &str,
-        PaginationInfo { start, limit }: &PaginationInfo,
+        str: String,
+        PaginationInfo { start, limit }: PaginationInfo,
     ) -> Result<DatabaseData> {
-        let parsed_value = parse_mongo_query(str)?;
+        let parsed_value = parse_mongo_query(&str)?;
         let db = self.client.database(&self.database);
 
         let ParsedValue::Query(CommandQuery {
@@ -131,9 +131,9 @@ impl Connector for MongodbConnector {
 
         let mut cursor = match command.command_type {
             MainCommand::Find => {
-                let mut opt = FindOptions::default();
-                opt.skip = Some(*start);
-                opt.limit = Some(*limit as i64);
+                let mut opt = FindOptions::builder().batch_size(MAXIMUM_DOCUMENTS).build();
+                opt.skip = Some(start);
+                opt.limit = Some(limit as i64);
                 opt.projection = command.query.get(1).cloned();
 
                 let mut return_count = false;
@@ -161,7 +161,9 @@ impl Connector for MongodbConnector {
                     collection
                         .aggregate(
                             vec![match_query, doc! {"$count": "count"}],
-                            AggregateOptions::builder().build(),
+                            AggregateOptions::builder()
+                                .batch_size(MAXIMUM_DOCUMENTS)
+                                .build(),
                         )
                         .await?
                 } else {
@@ -169,17 +171,21 @@ impl Connector for MongodbConnector {
                 }
             }
             MainCommand::Aggregate => {
-                let opt = AggregateOptions::builder().build();
+                let opt = AggregateOptions::builder()
+                    .batch_size(MAXIMUM_DOCUMENTS)
+                    .build();
                 command.query.append(&mut vec![
-                    doc! {"$skip": *start as i32},
+                    doc! {"$skip": start as i32},
                     doc! {
-                    "$limit": *limit as i32
+                    "$limit": limit as i32
                     },
                 ]);
                 collection.aggregate(command.query, opt).await?
             }
             MainCommand::Count => {
-                let opt = AggregateOptions::default();
+                let opt = AggregateOptions::builder()
+                    .batch_size(MAXIMUM_DOCUMENTS)
+                    .build();
                 let mut match_query = Document::new();
                 match_query.insert("$match", command.query.get(0));
                 collection
