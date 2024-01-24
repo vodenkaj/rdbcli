@@ -28,3 +28,4 @@ tempfile = "3.8.1"
 tokio = "1.29.1"
 tokio-stream = "0.1.14"
 whoami = "1.4.1"
+rusty_db_cli_mongo = { path = "../rusty_db_cli_mongo" }
