@@ -3,10 +3,10 @@ use crate::{
     connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
     widgets::scrollable_table::Row,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{doc, Bson, Document},
+    bson::{Bson, Document},
     options::{AggregateOptions, ClientOptions, CountOptions, FindOptions},
     Client, Collection, Cursor, Database,
 };
@@ -14,9 +14,8 @@ use rusty_db_cli_mongo::parser::ParametersExpression;
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
-    sync::Arc,
+    time::Duration,
 };
-use tokio_stream::StreamExt;
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -84,7 +83,7 @@ struct AggregateQuery {
 
 #[derive(Default)]
 struct CountQuery {
-    query: CountOptions,
+    filter: CountOptions,
 }
 
 pub enum Command {
@@ -138,13 +137,15 @@ impl FromStr for Command {
 impl QueryBuilder for FindQuery {
     fn add_sub_query(&mut self, key: SubCommand, value: ParametersExpression) {
         self.options.limit = Some(100);
-        //match key {
-        //    SubCommand::Count => {
-        //        self.count = true;
-        //    }
-        //    SubCommand::Sort => {}
-        //    SubCommand::AllowDiskUse => todo!(),
-        //}
+        self.options.max_time = Some(Duration::from_secs(5));
+        self.options.batch_size = Some(50);
+        match key {
+            SubCommand::Count => {
+                self.count = true;
+            }
+            SubCommand::Sort => {}
+            SubCommand::AllowDiskUse => todo!(),
+        }
     }
 
     async fn build(
@@ -222,9 +223,10 @@ impl Connector for MongodbConnector {
         str: String,
         PaginationInfo { start, limit }: PaginationInfo,
     ) -> Result<DatabaseData> {
-        Ok(InterpreterMongo::new(self)
-            .interpret(str.to_string())
-            .unwrap())
+        match InterpreterMongo::new(self).interpret(str.to_string()).await {
+            Ok(result) => Ok(result),
+            Err(err) => Err(anyhow!(err.message)),
+        }
         //let parsed_value = parse_mongo_query(&str)?;
         //let db = self.client.database(&self.database);
 
@@ -315,8 +317,8 @@ impl Connector for MongodbConnector {
     }
 }
 
-impl<'a> From<Arc<DatabaseData>> for TableData<'a> {
-    fn from(value: Arc<DatabaseData>) -> Self {
+impl<'a> From<DatabaseData> for TableData<'a> {
+    fn from(value: DatabaseData) -> Self {
         let mut header = Row::default();
         let mut body = Vec::new();
 

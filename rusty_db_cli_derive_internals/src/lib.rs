@@ -1,14 +1,7 @@
-use std::any::type_name;
-
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use regex::Regex;
-use syn::{parse_macro_input, DeriveInput, Fields};
-
-fn type_of<T>(_: &T) -> &'static str {
-    type_name::<T>()
-}
+use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(TryFrom)]
 pub fn try_from_variant(args: TokenStream) -> TokenStream {
@@ -21,24 +14,6 @@ pub fn try_from_variant(args: TokenStream) -> TokenStream {
         for variant in &data_enum.variants {
             let variant_name = &variant.ident;
             let first_variant = variant.fields.iter().next().unwrap();
-
-
-
-            //let boxed_value = Regex::new("Box < (.) >")
-            //    .unwrap()
-            //    .captures(&variant_name_str);
-
-            //let value = if let Some(boxed_value) = boxed_value {
-            //    boxed_value.get(0).unwrap().as_str()
-            //} else {
-            //    variant_name_str.as_str()
-            //};
-
-            //try_from_fc.extend(quote! {
-            //    fn hello() {
-            //        dbg!(stringify!(#first_variant));
-            //    }
-            //});
 
             try_from_fc.extend(quote! {
                 impl TryFrom<#enum_name> for #first_variant {

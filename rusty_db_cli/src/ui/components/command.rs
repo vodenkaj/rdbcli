@@ -1,13 +1,9 @@
 use super::base::{Component, ComponentCreateInfo};
-use crate::{
-    managers::connection_manager::ConnectionEvent,
-    systems::event_system::{Event, EventHandler, EventPool, EventValue},
-};
+use crate::systems::event_system::{Event, EventHandler, ConnectionEvent};
 use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::{style::Style, widgets::Paragraph};
 use regex::Regex;
-use std::sync::{Arc, Mutex};
 
 #[derive(Default, Clone)]
 pub enum Severity {
@@ -63,10 +59,10 @@ impl Component for CommandComponent {
 const COMMAND_REGEX: &str = r#"(.*) (.*)"#;
 
 impl EventHandler for CommandComponent {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
-        match &event.value {
-            EventValue::OnMessage(value) => self.info.data = value.clone(),
-            EventValue::OnInput(value) => {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        match event {
+            Event::OnMessage(value) => self.info.data = value.clone(),
+            Event::OnInput(value) => {
                 if matches!(value.mode, crate::application::Mode::Input) {
                     if !matches!(self.info.data.severity, Severity::Normal) {
                         self.info.data = Message::default()
@@ -96,12 +92,9 @@ impl EventHandler for CommandComponent {
                                 .with_context(|| "Invalid command")??;
                             match command {
                                 "c" | "connect" | "use" => {
-                                    pool.lock().unwrap().trigger(Event {
-                                        component_id: 0,
-                                        value: EventValue::OnConnection(
-                                            ConnectionEvent::SwitchDatabase(arg0.to_string()),
-                                        ),
-                                    });
+                                    self.info.event_sender.send(Event::OnConnection(
+                                        ConnectionEvent::SwitchDatabase(arg0.to_string()),
+                                    ));
                                     self.info.data.value = String::new();
                                 }
                                 _ => {

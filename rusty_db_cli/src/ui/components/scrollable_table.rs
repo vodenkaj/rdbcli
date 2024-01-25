@@ -5,12 +5,10 @@ use super::{
 use crate::{
     connectors::{
         base::{Connector, DatabaseData, PaginationInfo, TableData, LIMIT},
-        mongodb::connector::{
-            MongodbConnectorBuilder, DATE_TO_STRING_REGEX, OBJECT_ID_TO_STRING_REGEX,
-        },
+        mongodb::connector::{DATE_TO_STRING_REGEX, OBJECT_ID_TO_STRING_REGEX},
     },
-    managers::connection_manager::ConnectionEvent,
-    systems::event_system::{Event, EventHandler, EventPool, EventValue},
+    log_error,
+    systems::event_system::{ConnectionEvent, Event, EventHandler},
     types::{HorizontalDirection, VerticalDirection},
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
@@ -18,7 +16,6 @@ use crate::{
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event;
-use futures::executor::block_on;
 use mongodb::bson::Bson;
 use rand::Rng;
 use ratatui::{layout::Constraint, widgets::Paragraph};
@@ -28,8 +25,8 @@ use tokio::sync::Mutex;
 
 pub struct ScrollableTableComponent {
     info: ComponentCreateInfo<TableData<'static>>,
-    data: Arc<DatabaseData>,
-    next_data: Option<tokio::task::JoinHandle<anyhow::Result<DatabaseData>>>,
+    data: DatabaseData,
+    is_fetching: bool,
     state: ScrollableTableState,
     query: String,
     connector: Arc<Mutex<dyn Connector>>,
@@ -47,9 +44,9 @@ impl ScrollableTableComponent {
         conn: Arc<Mutex<dyn Connector>>,
     ) -> Self {
         Self {
+            is_fetching: false,
             query: String::new(),
-            data: Arc::new(DatabaseData(Vec::new())),
-            next_data: None,
+            data: DatabaseData(Vec::new()),
             info,
             state,
             connector: conn,
@@ -91,15 +88,28 @@ impl ScrollableTableComponent {
     }
 
     pub fn spawn_next_data(&mut self) {
-        let (cloned_conn, cloned_query, cloned_pagination) =
-            (self.connector.clone(), self.query.clone(), self.pagination);
-        self.next_data = Some(tokio::spawn(async move {
-            cloned_conn
+        let (cloned_conn, cloned_query, cloned_pagination, event_sender) = (
+            self.connector.clone(),
+            self.query.clone(),
+            self.pagination,
+            self.info.event_sender.clone(),
+        );
+        self.is_fetching = true;
+        tokio::spawn(async move {
+            let result = cloned_conn
                 .lock()
                 .await
                 .get_data(cloned_query, cloned_pagination)
-                .await
-        }));
+                .await;
+            match result {
+                Ok(data) => {
+                    event_sender.send(Event::DatabaseData(data)).unwrap();
+                }
+                Err(err) => {
+                    log_error!(event_sender, Some(err));
+                }
+            };
+        });
     }
 
     pub fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
@@ -144,8 +154,8 @@ impl ScrollableTableComponent {
         }
     }
 
-    fn set_data(&mut self, data: Result<DatabaseData>) -> anyhow::Result<()> {
-        self.data = Arc::new(data?);
+    fn set_data(&mut self, data: DatabaseData) -> anyhow::Result<()> {
+        self.data = data;
         self.info.data = TableData::from(self.data.clone());
         self.horizontal_offset_max = self.info.data.header.cells.len() as i32 - 1;
         self.vertical_offset_max = self.info.data.rows.len() as i32;
@@ -206,14 +216,8 @@ impl Component for ScrollableTableComponent {
     }
 
     fn draw(&mut self, info: ComponentDrawInfo) {
-        match self.next_data.as_mut() {
-            // TODO: Refactor this
-            Some(value) => {
-                if value.is_finished() {
-                    let result = block_on(value).unwrap();
-                    self.set_data(result);
-                    self.next_data = None;
-                }
+        match self.is_fetching {
+            true => {
                 let random_state: String = (0..rand::thread_rng().gen_range(0..3))
                     .map(|_| ".")
                     .collect();
@@ -222,7 +226,7 @@ impl Component for ScrollableTableComponent {
                     info.area,
                 )
             }
-            None => {
+            false => {
                 info.frame.render_stateful_widget(
                     ScrollableTable::new(
                         self.info.data.rows.clone(),
@@ -241,27 +245,30 @@ impl Component for ScrollableTableComponent {
 }
 
 impl EventHandler for ScrollableTableComponent {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<std::sync::Mutex<EventPool>>)) -> Result<()> {
-        match &event.value {
-            EventValue::OnConnection(value) => match value {
-                ConnectionEvent::Connect(value) => {
-                    self.set_connector(Arc::new(Mutex::new(block_on(async {
-                        MongodbConnectorBuilder::new(&value.uri).build().await
-                    })?)))
-                }
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        match event {
+            Event::OnConnection(value) => match value {
                 ConnectionEvent::SwitchDatabase(value) => {
-                    block_on(async { self.connector.lock().await.set_database(value) });
-                    pool.lock().unwrap().trigger(Event {
-                        component_id: 0,
-                        value: EventValue::OnMessage(Message {
-                            value: format!("Database switched to '{}'", value),
-                            severity: Severity::Info,
-                        }),
-                    });
+                    let connector = self.connector.clone();
+                    let cloned_value = value.clone();
+                    let cloned_sender = self.info.event_sender.clone();
+                    let result = self
+                        .info
+                        .event_sender
+                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                            connector.lock().await.set_database(&cloned_value);
+                            cloned_sender
+                                .send(Event::OnMessage(Message {
+                                    value: format!("Database switched to '{}'", &cloned_value),
+                                    severity: Severity::Info,
+                                }))
+                                .unwrap();
+                        })));
+                    log_error!(self.info.event_sender, result.err());
                 }
-                _ => {}
+                _ => (),
             },
-            EventValue::OnInput(value) => {
+            Event::OnInput(value) => {
                 if matches!(value.mode, crate::application::Mode::View) {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
@@ -301,10 +308,9 @@ impl EventHandler for ScrollableTableComponent {
                     }
                 }
             }
-            EventValue::DatabaseData(value) => {
-                self.info.data = TableData::from(value.clone());
-                self.horizontal_offset_max = (self.info.data.header.cells.len() - 1) as i32;
-                self.vertical_offset_max = self.info.data.rows.len() as i32;
+            Event::DatabaseData(value) => {
+                log_error!(self.info.event_sender, self.set_data(value.clone()).err());
+                self.is_fetching = false;
             }
             _ => {}
         }

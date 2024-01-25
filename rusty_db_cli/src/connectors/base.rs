@@ -24,7 +24,7 @@ impl<'a> Default for TableData<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DatabaseData(pub Vec<Value>);
 
 impl Deref for DatabaseData {

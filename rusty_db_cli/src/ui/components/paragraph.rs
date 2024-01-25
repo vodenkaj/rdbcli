@@ -1,8 +1,6 @@
-use crate::systems::event_system::{Event, EventHandler, EventPool};
+use crate::systems::event_system::{Event, EventHandler};
 use anyhow::Result;
 use ratatui::widgets::Paragraph;
-use std::sync::{Arc, Mutex};
-
 use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 
 pub struct ParagraphComponent {
@@ -35,7 +33,7 @@ impl Component for ParagraphComponent {
 }
 
 impl EventHandler for ParagraphComponent {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
         Ok(())
     }
 }

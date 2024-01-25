@@ -1,3 +1,4 @@
+use core::time;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -5,11 +6,11 @@ use crossterm::{
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::application::App;
-use core::time;
 use std::{
     io::{self},
     sync::{Arc, Mutex},
-    time::Duration, thread,
+    thread,
+    time::Duration,
 };
 
 #[tokio::main]
@@ -19,7 +20,7 @@ async fn main() {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
     let backend = CrosstermBackend::new(stdout);
     let term = Terminal::new(backend).unwrap();
-    let app = App::new(term);
+    let app = App::new(term).await;
 
     loop {
         let mut handle = app.lock().unwrap();

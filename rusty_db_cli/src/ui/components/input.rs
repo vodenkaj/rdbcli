@@ -1,12 +1,11 @@
 use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 use crate::{
     application::Mode,
-    systems::event_system::{Event, EventHandler, EventPool, EventValue},
+    systems::event_system::{Event, EventHandler},
 };
 use anyhow::Result;
 use crossterm::event;
 use ratatui::widgets::Paragraph;
-use std::sync::{Arc, Mutex};
 
 pub struct InputComponent {
     info: ComponentCreateInfo<String>,
@@ -50,8 +49,8 @@ impl Component for InputComponent {
 }
 
 impl EventHandler for InputComponent {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
-        if let EventValue::OnInput(value) = &event.value {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        if let Event::OnInput(value) = event {
             if let Mode::Input = value.mode {
                 match value.key.code {
                     event::KeyCode::Char(ch) => {

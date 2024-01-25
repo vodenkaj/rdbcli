@@ -1,8 +1,8 @@
 use super::components::base::{Component, ComponentDrawInfo};
 use crate::{
     application::Mode,
-    managers::{connection_manager::ConnectionManager, window_manager::WindowManager},
-    systems::event_system::{Event, EventHandler, EventManager, EventPool, EventValue},
+    managers::window_manager::WindowManager,
+    systems::event_system::{Event, EventHandler, EventManager},
 };
 use anyhow::Result;
 use crossterm::event;
@@ -23,13 +23,13 @@ pub struct WindowRenderInfo {
 }
 
 pub struct WindowBuilder {
-    components: Vec<Arc<Mutex<dyn Component>>>,
+    components: Vec<Box<dyn Component>>,
     keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Window) + Send + Sync>>,
 }
 
 impl EventHandler for Window {
-    fn on_event(&mut self, (event, pool): (&Event, Arc<Mutex<EventPool>>)) -> Result<()> {
-        if let EventValue::OnInput(value) = &event.value {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        if let Event::OnInput(value) = &event {
             match value.key.code {
                 event::KeyCode::Char(ch) => {
                     if let Some(handler) = self.keybinds.remove(&value.key.code) {
@@ -52,12 +52,12 @@ impl WindowBuilder {
         }
     }
 
-    pub fn with_component(mut self, component: Arc<Mutex<dyn Component>>) -> Self {
+    pub fn with_component(mut self, component: Box<dyn Component>) -> Self {
         self.components.push(component);
         self
     }
 
-    pub fn build(self, event_manager: Arc<Mutex<EventManager>>) -> Window {
+    pub fn build(self, event_manager: EventManager) -> Window {
         if self.components.len() <= 0 {
             panic!("Cannot build window without any component");
         }
@@ -74,8 +74,8 @@ impl WindowBuilder {
 
 pub struct Window {
     id: usize,
-    pub event_manager: Arc<Mutex<EventManager>>,
-    components: Vec<Arc<Mutex<dyn Component>>>,
+    pub event_manager: EventManager,
+    components: Vec<Box<dyn Component>>,
     pub focused_component_idx: usize,
     keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Self) + Send + Sync>>,
 }
@@ -90,66 +90,43 @@ impl Window {
     }
 
     pub fn render(&mut self, info: WindowRenderInfo) {
-        self.event_manager.lock().unwrap().pool();
+        self.event_manager.pool(&mut self.components);
 
         info.terminal
             .lock()
             .unwrap()
-            .draw(|f| {
-                match info.mode {
-                    Mode::View | Mode::Input => {
-                        let mut components: Vec<_> = self
-                            .components
-                            .iter_mut()
-                            .map(|c| match c.lock() {
-                                Ok(value) => value,
-                                Err(value) => {
-                                    let guard = value.into_inner();
-                                    // TODO: Logger?
-                                    println!("Thread recovered from mutex poisoning");
-                                    guard
-                                }
-                            })
-                            .filter(|w| w.is_visible())
-                            .collect();
-                        let constraints: Vec<Constraint> =
-                            components.iter().map(|w| w.get_constraint()).collect();
-                        let chunks = Layout::default()
-                            .direction(ratatui::layout::Direction::Vertical)
-                            .constraints(constraints)
-                            .split(f.size());
+            .draw(|f| match info.mode {
+                Mode::View | Mode::Input => {
+                    let mut components: Vec<_> = self
+                        .components
+                        .iter_mut()
+                        .filter(|w| w.is_visible())
+                        .collect();
+                    let constraints: Vec<Constraint> =
+                        components.iter().map(|w| w.get_constraint()).collect();
+                    let chunks = Layout::default()
+                        .direction(ratatui::layout::Direction::Vertical)
+                        .constraints(constraints)
+                        .split(f.size());
 
-                        for (pos, component) in components.iter_mut().enumerate() {
-                            component.draw(ComponentDrawInfo {
-                                frame: f,
-                                area: chunks[pos],
-                            });
-                        }
+                    for (pos, component) in components.iter_mut().enumerate() {
+                        component.draw(ComponentDrawInfo {
+                            frame: f,
+                            area: chunks[pos],
+                        });
                     }
                 }
             })
             .unwrap();
     }
 
-    pub async fn on_key(&mut self, info: OnInputInfo) -> anyhow::Result<()> {
-        self.event_manager
-            .lock()
-            .unwrap()
-            .trigger_event_sync(Event {
-                component_id: self.focused_component_idx,
-                value: EventValue::OnInput(info),
-            })?;
-        Ok(())
-    }
-
-    fn get_focused_component(&mut self) -> Arc<Mutex<dyn Component>> {
-        self.components[self.focused_component_idx].clone()
+    pub fn on_key(&mut self, event: Event) {
+        self.event_manager.sender.send(event).unwrap();
+        self.event_manager.pool(&mut self.components).unwrap();
     }
 }
 
 pub struct OnInputInfo {
-    pub window_manager: Arc<Mutex<WindowManager>>,
-    pub connection_manager: Arc<Mutex<ConnectionManager>>,
     pub terminal: Arc<Mutex<Terminal<CrosstermBackend<Stdout>>>>,
     pub mode: Mode,
     pub key: event::KeyEvent,

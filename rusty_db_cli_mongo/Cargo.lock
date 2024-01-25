@@ -71,14 +71,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
 
 [[package]]
-name = "rusty-db-cli-mongo"
-version = "0.1.0"
-dependencies = [
- "dyn-clone",
- "rusty_db_cli_derive_internals",
-]
-
-[[package]]
 name = "rusty_db_cli_derive_internals"
 version = "0.1.0"
 dependencies = [
@@ -86,6 +78,14 @@ dependencies = [
  "quote",
  "regex",
  "syn",
+]
+
+[[package]]
+name = "rusty_db_cli_mongo"
+version = "0.1.0"
+dependencies = [
+ "dyn-clone",
+ "rusty_db_cli_derive_internals",
 ]
 
 [[package]]

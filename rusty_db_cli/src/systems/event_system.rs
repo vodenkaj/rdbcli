@@ -1,30 +1,34 @@
 use crate::{
     connectors::base::DatabaseData,
-    managers::{
-        auth_manager::AuthCommand, connection_manager::ConnectionEvent,
-        window_manager::WindowCommand,
-    },
-    ui::{components::command::Message, window::OnInputInfo},
+    managers::window_manager::WindowCommand,
+    ui::{components::{command::Message, base::Component}, window::OnInputInfo},
 };
 use anyhow::Result;
+use mongodb::event::command::ConnectionInfo;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
+use tokio::{task::JoinHandle, time};
 
-pub struct Event {
-    pub component_id: usize,
-    pub value: EventValue,
+pub enum ConnectionEvent {
+    Add(ConnectionInfo),
+    Connect(ConnectionInfo),
+    SwitchDatabase(String),
 }
 
-pub enum EventValue {
+pub enum Event {
     OnInput(OnInputInfo),
     OnMessage(Message),
-    DatabaseData(Arc<DatabaseData>),
+    DatabaseData(DatabaseData),
     OnQuery(String),
-    OnAuthCommand(AuthCommand),
     OnWindowCommand(WindowCommand),
     OnConnection(ConnectionEvent),
+    OnAsyncEvent(JoinHandle<()>),
 }
 
 #[derive(Eq, Hash, PartialEq, Debug)]
@@ -36,18 +40,19 @@ pub enum EventType {
     OnAuthCommand,
     OnConnection,
     OnMessage,
+    AsyncEvent,
 }
 
 impl Event {
     pub fn get_type(&self) -> EventType {
-        match self.value {
-            EventValue::OnInput(_) => EventType::OnInput,
-            EventValue::DatabaseData(_) => EventType::DatabaseData,
-            EventValue::OnQuery(_) => EventType::OnQuery,
-            EventValue::OnAuthCommand(_) => EventType::OnAuthCommand,
-            EventValue::OnWindowCommand(_) => EventType::OnWindowCommand,
-            EventValue::OnConnection(_) => EventType::OnConnection,
-            EventValue::OnMessage(_) => EventType::OnMessage,
+        match self {
+            Event::OnInput(_) => EventType::OnInput,
+            Event::DatabaseData(_) => EventType::DatabaseData,
+            Event::OnQuery(_) => EventType::OnQuery,
+            Event::OnWindowCommand(_) => EventType::OnWindowCommand,
+            Event::OnConnection(_) => EventType::OnConnection,
+            Event::OnMessage(_) => EventType::OnMessage,
+            Event::OnAsyncEvent(_) => EventType::AsyncEvent,
         }
     }
 }
@@ -67,54 +72,53 @@ impl EventPool {
     }
 }
 
-#[derive(Default)]
 pub struct EventManager {
-    pub handlers: HashMap<EventType, Vec<Arc<Mutex<dyn EventHandler>>>>,
-    pub pool: Arc<Mutex<EventPool>>,
+    pub sender: Sender<Event>,
+    receiver: Receiver<Event>,
+    async_events: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
-pub trait EventHandler: Send + Sync {
-    fn on_event(&mut self, event: (&Event, Arc<Mutex<EventPool>>)) -> Result<()>;
+pub trait EventHandler {
+    fn on_event(&mut self, event: &Event) -> Result<()>;
 }
 
 impl EventManager {
-    pub fn new() -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self::default()))
+    pub fn new() -> Self {
+        let (sender, receiver) = channel();
+
+        let async_events: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let cloned_async_events = async_events.clone();
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+
+                let event = cloned_async_events.lock().unwrap().pop();
+                if let Some(event) = event {
+                    event.await;
+                }
+            }
+        });
+
+        Self {
+            sender,
+            receiver,
+            async_events,
+        }
     }
 
-    pub fn pool(&mut self) {
-        let events;
-        {
-            let mut guard = self.pool.lock().unwrap();
-            events = guard.events.clone();
-            guard.events.clear();
-        }
-        for event in events {
-            self.handle_event(event);
-        }
-    }
-
-    fn handle_event(&mut self, event: Arc<Event>) -> Result<()> {
-        if let Some(handlers) = self.handlers.get_mut(&event.get_type()) {
+    pub fn pool(&mut self, handlers: &mut Vec<Box<dyn Component>>) -> Result<()> {
+        while let Ok(event) = self.receiver.try_recv() {
             for handler in handlers.iter_mut() {
-                handler
-                    .lock()
-                    .unwrap()
-                    .on_event((&event, self.pool.clone()))?
+                handler.on_event(&event)?
             }
         }
+
         Ok(())
     }
 
-    pub fn subscribe(&mut self, handler: Arc<Mutex<dyn EventHandler>>, event_type: EventType) {
-        self.handlers.entry(event_type).or_default().push(handler);
-    }
-
-    pub async fn trigger_event_async(&mut self, event: Event) {
-        self.pool.lock().unwrap().events.push(Arc::new(event));
-    }
-
-    pub fn trigger_event_sync(&mut self, event: Event) -> Result<()> {
-        self.handle_event(Arc::new(event))
+    pub fn trigger(&self, event: JoinHandle<()>) {
+        self.async_events.lock().unwrap().push(event);
     }
 }

@@ -1,5 +1,4 @@
-use futures::executor::block_on;
-use mongodb::bson::Document;
+use mongodb::{bson::Document, options::FindOptions};
 use rusty_db_cli_mongo::{
     interpreter::Interpreter,
     lexer::{LexerError, Literal},
@@ -71,13 +70,15 @@ impl<'a> InterpreterMongo<'a> {
         }
     }
 
-    pub fn interpret(mut self, data: String) -> Result<DatabaseData, InterpreterError> {
+    pub async fn interpret(mut self, data: String) -> Result<DatabaseData, InterpreterError> {
         let mut program = Interpreter::new().tokenize(data)?.parse()?;
 
         if let Some(expression) = program.body.pop() {
             return match expression {
                 Expression::ExpressionStatement(expression_statement) => {
-                    return self.execute_call_expression(expression_statement.expression);
+                    return self
+                        .execute_call_expression(expression_statement.expression)
+                        .await;
                 }
                 _ => {
                     // Program should not ever have another Program in it
@@ -111,11 +112,9 @@ impl<'a> InterpreterMongo<'a> {
             let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
             let mut cursor = command_type.build(collection).await.unwrap();
-            dbg!("HERERE");
             let mut result: DatabaseData = DatabaseData(Vec::new());
 
             while let Some(doc) = cursor.try_next().await.unwrap() {
-                dbg!(result.len());
                 result.push(serde_json::to_value(doc).unwrap());
                 if result.len() >= 100 as usize {
                     break;
@@ -144,7 +143,7 @@ impl<'a> InterpreterMongo<'a> {
         })
     }
 
-    fn execute_call_expression(
+    async fn execute_call_expression(
         &mut self,
         call: CallExpression,
     ) -> Result<DatabaseData, InterpreterError> {
@@ -155,8 +154,7 @@ impl<'a> InterpreterMongo<'a> {
                 message: "Empty call expression".to_string(),
             });
         }
-
-        block_on(self.execute_db_call())
+        self.execute_db_call().await
     }
 
     fn resolve_call_expression(&mut self, call: CallExpression) {

@@ -1,12 +1,7 @@
 use crate::{
-    managers::{
-        auth_manager::AuthManager,
-        connection_manager::ConnectionManager,
-        window_manager::{WindowManager, WindowManagerBuilder},
-    },
-    systems::event_system::{Event, EventValue},
+    managers::window_manager::{WindowManager, WindowManagerBuilder},
+    systems::event_system::Event,
     ui::{
-        components::command::{Message, Severity},
         layouts::get_table_layout,
         window::{OnInputInfo, WindowRenderInfo},
     },
@@ -30,27 +25,19 @@ pub struct App {
     pub mode: Mode,
     logs: Vec<String>,
     pub terminal: Arc<Mutex<Terminal<CrosstermBackend<Stdout>>>>,
-    window_manager: Arc<Mutex<WindowManager>>,
-    auth_manager: Arc<Mutex<AuthManager>>,
-    connection_manager: Arc<Mutex<ConnectionManager>>,
+    window_manager: WindowManager,
 }
 
 impl App {
-    pub fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Arc<Mutex<Self>> {
-        let auth_manager = Arc::new(Mutex::new(AuthManager::new()));
-        let connection_manager = Arc::new(Mutex::new(ConnectionManager::new()));
+    pub async fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             should_exit: false,
             mode: Mode::View,
             logs: Vec::new(),
             window_manager: WindowManagerBuilder::new()
-                //.with_window(get_login_layout())
-                //.with_window(get_connections_layout(auth_manager.clone()))
-                .with_window(get_table_layout())
-                .build(auth_manager.clone()),
+                .with_window(get_table_layout().await)
+                .build(),
             terminal: Arc::new(Mutex::new(terminal)),
-            auth_manager,
-            connection_manager,
         }))
     }
 
@@ -80,11 +67,7 @@ impl App {
 
     pub fn render(&mut self) {
         self.window_manager
-            .lock()
-            .unwrap()
             .get_focused_window()
-            .lock()
-            .unwrap()
             .render(WindowRenderInfo {
                 terminal: self.terminal.clone(),
                 mode: self.mode,
@@ -92,38 +75,14 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: event::KeyEvent) {
-        let event_manager;
-        let focused;
-        {
-            let mut manager = self.window_manager.lock().unwrap();
-            let window = manager.get_focused_window().lock().unwrap();
-            event_manager = window.event_manager.clone();
-            focused = window.focused_component_idx;
-        }
-        let mut events = event_manager.lock().unwrap();
-        let result = events.trigger_event_sync(Event {
-            component_id: focused,
-            value: EventValue::OnInput(OnInputInfo {
-                connection_manager: self.connection_manager.clone(),
-                window_manager: self.window_manager.clone(),
+        self.window_manager
+            .get_focused_window()
+            .on_key(Event::OnInput(OnInputInfo {
                 terminal: self.terminal.clone(),
                 mode: self.mode,
                 key,
-            }),
-        });
+            }));
 
-        if let Err(err) = result {
-            self.log(&err.to_string());
-            events
-                .trigger_event_sync(Event {
-                    component_id: focused,
-                    value: EventValue::OnMessage(Message {
-                        value: err.to_string(),
-                        severity: Severity::Error,
-                    }),
-                })
-                .unwrap();
-        }
         match self.mode {
             Mode::View => match key.code {
                 event::KeyCode::Char('q') => {
@@ -143,4 +102,18 @@ impl App {
             },
         }
     }
+}
+
+#[macro_export]
+macro_rules! log_error {
+    ($event_sender:expr, $err:expr) => {
+        if let Some(err) = $err {
+            $event_sender
+                .send(Event::OnMessage(Message {
+                    value: err.to_string(),
+                    severity: Severity::Error,
+                }))
+                .unwrap();
+        }
+    };
 }
