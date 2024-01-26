@@ -1,6 +1,7 @@
 use core::fmt;
-use std::fmt::Debug;
 use rusty_db_cli_derive_internals::TryFrom;
+use serde::{ser::Serializer, Serialize};
+use std::fmt::Debug;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenType {
@@ -22,6 +23,7 @@ pub enum TokenType {
     Number,
     Bool,
     Regex,
+    RegexFlags,
     Null,
 
     Eof,
@@ -49,8 +51,31 @@ pub enum Literal {
     Null(Null),
 }
 
+impl Serialize for Literal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Literal::String(str) => str.serialize(serializer),
+            Literal::Number(num) => num.serialize(serializer),
+            Literal::Bool(bool) => bool.serialize(serializer),
+            Literal::Null(null) => null.serialize(serializer),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Null {}
+
+impl Serialize for Null {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_none()
+    }
+}
 
 impl ToString for Literal {
     fn to_string(&self) -> String {
@@ -134,17 +159,21 @@ impl Lexer {
             ':' => self.add_token(TokenType::Colon, None),
             '"' => {
                 self.string();
-                self.add_token(
-                    TokenType::String,
-                    Some(Literal::String(self.get_current_lexeme())),
-                )
+                let mut str = self.get_current_lexeme();
+                str.remove(0);
+                str.pop();
+                self.add_token(TokenType::String, Some(Literal::String(str)))
             }
             '/' => {
                 self.regex();
-                self.add_token(
-                    TokenType::Regex,
-                    Some(Literal::String(self.get_current_lexeme())),
-                )
+                let mut str = self.get_current_lexeme();
+                str.remove(0);
+                str.pop();
+                self.add_token(TokenType::Regex, Some(Literal::String(str)));
+
+                self.regex_flags();
+                let flags = self.get_current_lexeme();
+                self.add_token(TokenType::RegexFlags, Some(Literal::String(flags)))
             }
             _ => {
                 if c.is_ascii_digit() || (c == '-' && self.peek().is_numeric()) {
@@ -155,7 +184,7 @@ impl Lexer {
                             self.get_current_lexeme().parse::<f32>().unwrap(),
                         )),
                     );
-                } else if self.is_identifier() {
+                } else if c.is_ascii_alphabetic() || (c == '$' || c == '_') {
                     self.identifier();
 
                     match self.get_current_lexeme().as_str() {
@@ -168,7 +197,6 @@ impl Lexer {
                         ),
                     }
                 } else {
-                    self.add_token(TokenType::Unknown, None);
                     self.error("Unknown character");
                 }
             }
@@ -241,6 +269,13 @@ impl Lexer {
         }
 
         self.advance();
+    }
+
+    fn regex_flags(&mut self) {
+        let valid_regex_flags = ['i', 'm', 'x', 's', 'u'];
+        while valid_regex_flags.iter().any(|&x| self.peek() == x) {
+            self.advance();
+        }
     }
 
     fn is_identifier(&mut self) -> bool {

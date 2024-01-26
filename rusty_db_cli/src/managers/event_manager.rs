@@ -1,12 +1,14 @@
 use crate::{
     connectors::base::DatabaseData,
     managers::window_manager::WindowCommand,
-    ui::{components::{command::Message, base::Component}, window::OnInputInfo},
+    ui::{
+        components::{base::Component, command::Message},
+        window::OnInputInfo,
+    },
 };
 use anyhow::Result;
 use mongodb::event::command::ConnectionInfo;
 use std::{
-    collections::HashMap,
     sync::{
         mpsc::{channel, Receiver, Sender},
         Arc, Mutex,

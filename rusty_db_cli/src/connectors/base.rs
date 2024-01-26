@@ -44,7 +44,7 @@ impl DerefMut for DatabaseData {
 #[derive(Clone, Copy)]
 pub struct PaginationInfo {
     pub start: u64,
-    pub limit: u64,
+    pub limit: i64,
 }
 
 impl PaginationInfo {
@@ -54,7 +54,7 @@ impl PaginationInfo {
     }
 }
 
-pub const LIMIT: u64 = 100;
+pub const LIMIT: i64 = 100;
 
 #[async_trait]
 pub trait Connector: Send + Sync {

@@ -1,21 +1,22 @@
-use super::interpreter::{InterpreterError, InterpreterMongo};
+use super::interpreter::InterpreterMongo;
 use crate::{
     connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
+    try_from,
     widgets::scrollable_table::Row,
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mongodb::{
-    bson::{Bson, Document},
+    bson::{doc, to_bson, Bson, Document},
     options::{AggregateOptions, ClientOptions, CountOptions, FindOptions},
     Client, Collection, Cursor, Database,
 };
-use rusty_db_cli_mongo::parser::ParametersExpression;
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-    time::Duration,
+use rusty_db_cli_mongo::{
+    interpreter::InterpreterError,
+    parser::{ArrayExpression, ObjectExpression, ParametersExpression},
+    to_interpter_error,
 };
+use std::collections::{HashMap, HashSet};
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -54,36 +55,122 @@ pub const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
 pub const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
 pub const DATE_TO_STRING_REGEX: &str = r##"(Date\(([A-z0-9-\/]+?)\))"##;
 pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\(([A-z0-9-\/]+?)\))"##;
-const MAXIMUM_DOCUMENTS: u32 = 100;
 
-pub enum CommandType {
-    MainCommand(MainCommand),
-    SubCommand(SubCommand),
+impl TryFrom<(String, ParametersExpression)> for Command {
+    type Error = InterpreterError;
+
+    fn try_from((command, params): (String, ParametersExpression)) -> Result<Self, Self::Error> {
+        match command.to_lowercase().as_str() {
+            "find" => {
+                if params.params.len() > 2 {
+                    return Err(InterpreterError {
+                        message: "Find {} only accepts 2 parameters".to_string(),
+                    });
+                }
+
+                let filter = params.get_nth_of_type::<ObjectExpression>(0).ok();
+                let projection = params.get_nth_of_type::<ObjectExpression>(1).ok();
+
+                let mut opts = FindOptions::default();
+                if let Bson::Document(doc) = to_interpter_error!(to_bson(&projection))? {
+                    opts.projection = Some(doc);
+                }
+
+                if filter.is_some() && !filter.as_ref().unwrap().properties.is_empty() {
+                    if let Bson::Document(doc) = to_interpter_error!(to_bson(&filter))? {
+                        return Ok(Command::Find(FindQuery {
+                            options: opts,
+                            filter: Some(doc),
+                            ..Default::default()
+                        }));
+                    }
+                }
+
+                Ok(Command::Find(FindQuery {
+                    options: opts,
+                    ..Default::default()
+                }))
+            }
+            "count" => {
+                let filter = params.get_nth_of_type::<ObjectExpression>(0).ok();
+
+                if filter.is_some() && !filter.as_ref().unwrap().properties.is_empty() {
+                    if let Bson::Document(doc) = to_interpter_error!(to_bson(&filter))? {
+                        return Ok(Command::Count(CountQuery {
+                            filter: Some(doc),
+                            ..Default::default()
+                        }));
+                    }
+                }
+
+                Ok(Command::Count(CountQuery {
+                    ..Default::default()
+                }))
+            }
+            "aggregate" => {
+                if params.params.is_empty() {
+                    return Err(InterpreterError {
+                        message: "Aggregate requires at least one parameter".to_string(),
+                    });
+                }
+                let arr = try_from!(<ArrayExpression>(params.params[0].clone()))?.elements;
+
+                if arr.is_empty() {
+                    return Err(InterpreterError {
+                        message: "Aggregate requires at least one pipeline".to_string(),
+                    });
+                }
+
+                let pipelines = arr
+                    .into_iter()
+                    .map(|p| {
+                        let object = try_from!(<ObjectExpression>(p))?;
+                        if let Bson::Document(doc) = to_interpter_error!(to_bson(&object))? {
+                            Ok(doc)
+                        } else {
+                            Err(InterpreterError {
+                                message: "Bson could not be converted to document".to_string(),
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<Document>, InterpreterError>>()?;
+
+                Ok(Command::Aggregate(AggregateQuery {
+                    pipelines,
+                    options: AggregateOptions::default(),
+                }))
+            }
+            _ => Err(InterpreterError {
+                message: (format!("Command {} not implemented", command)),
+            }),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum MainCommand {
-    Find(FindOptions),
-    Aggregate(AggregateOptions),
-    Count(CountOptions),
+    Find(Document, FindOptions),
+    Aggregate(Vec<Document>, AggregateOptions),
+    Count(Document, CountOptions),
 }
 
 #[derive(Default)]
-struct FindQuery {
+pub struct FindQuery {
     options: FindOptions,
     count: bool,
     filter: Option<Document>,
-    sort: Option<Document>,
 }
 
 #[derive(Default)]
-struct AggregateQuery {
-    query: AggregateOptions,
+pub struct AggregateQuery {
+    pipelines: Vec<Document>,
+    options: AggregateOptions,
 }
 
 #[derive(Default)]
-struct CountQuery {
-    filter: CountOptions,
+pub struct CountQuery {
+    filter: Option<Document>,
+    options: AggregateOptions,
 }
 
 pub enum Command {
@@ -94,109 +181,184 @@ pub enum Command {
 
 #[async_trait]
 impl QueryBuilder for Command {
-    fn add_sub_query(&mut self, key: SubCommand, params: ParametersExpression) {
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
         match self {
-            Command::Find(find) => find.add_sub_query(key, params),
-            Command::Count(count) => {} //count.add_sub_query(key, params),
-            Command::Aggregate(aggregate) => {} //aggregate.add_sub_query(key, params),
+            Command::Find(find) => find.add_sub_query(query),
+            Command::Count(count) => count.add_sub_query(query),
+            Command::Aggregate(aggregate) => aggregate.add_sub_query(query),
         }
     }
 
     async fn build(
         self,
         collection: Collection<Document>,
+        pagination: PaginationInfo,
     ) -> Result<Cursor<Document>, mongodb::error::Error> {
         match self {
-            Command::Find(find) => find.build(collection).await,
-            Command::Count(count) => {
-                todo!()
-            } //count.add_sub_query(key, params),
-            Command::Aggregate(aggregate) => {
-                todo!()
-            } //aggregate.add_sub_query(key, params),
-        }
-    }
-}
-
-impl FromStr for Command {
-    type Err = InterpreterError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "find" => Ok(Command::Find(FindQuery::default())),
-            "aggregate" => Ok(Command::Aggregate(AggregateQuery::default())),
-            "count" => Ok(Command::Count(CountQuery::default())),
-            _ => Err(InterpreterError {
-                message: format!("Unknown command {}", s),
-            }),
+            Command::Find(find) => find.build(collection, pagination).await,
+            Command::Count(count) => count.build(collection, pagination).await,
+            Command::Aggregate(aggregate) => aggregate.build(collection, pagination).await,
         }
     }
 }
 
 #[async_trait]
 impl QueryBuilder for FindQuery {
-    fn add_sub_query(&mut self, key: SubCommand, value: ParametersExpression) {
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
         self.options.limit = Some(100);
-        self.options.max_time = Some(Duration::from_secs(5));
         self.options.batch_size = Some(50);
-        match key {
+        match query {
             SubCommand::Count => {
                 self.count = true;
             }
-            SubCommand::Sort => {}
+            SubCommand::Sort(doc) => {
+                self.options.sort = doc;
+            }
+            SubCommand::AllowDiskUse => {
+                self.options.allow_disk_use = Some(true);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn build(
+        mut self,
+        collection: Collection<Document>,
+        pagination: PaginationInfo,
+    ) -> Result<Cursor<Document>, mongodb::error::Error> {
+        if self.count {
+            let mut pipelines = vec![doc! {"$count": "count"}];
+            if self.filter.is_some() {
+                pipelines.push(self.filter.unwrap());
+            };
+
+            let mut aggregate_options = AggregateOptions::default();
+            aggregate_options.allow_disk_use = self.options.allow_disk_use;
+
+            collection.aggregate(pipelines, aggregate_options).await
+        } else {
+            self.options.skip = Some(pagination.start);
+            self.options.limit = Some(pagination.limit);
+            collection.find(self.filter, self.options).await
+        }
+    }
+}
+
+#[async_trait]
+impl QueryBuilder for CountQuery {
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
+        match query {
             SubCommand::AllowDiskUse => todo!(),
+            _ => Err(InterpreterError {
+                message: "Count only supports AllowDiskUse".to_string(),
+            }),
         }
     }
 
     async fn build(
         self,
         collection: Collection<Document>,
+        _: PaginationInfo,
     ) -> Result<Cursor<Document>, mongodb::error::Error> {
-        collection.find(Document::new(), self.options).await
+        let mut pipelines = vec![doc! {"$count": "count"}];
+        if self.filter.is_some() {
+            pipelines.push(self.filter.unwrap());
+        };
+
+        let mut aggregate_options = AggregateOptions::default();
+        aggregate_options.allow_disk_use = self.options.allow_disk_use;
+
+        collection.aggregate(pipelines, aggregate_options).await
+    }
+}
+
+#[async_trait]
+impl QueryBuilder for AggregateQuery {
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
+        match query {
+            SubCommand::Count => todo!(),
+            SubCommand::AllowDiskUse => todo!(),
+            _ => Err(InterpreterError {
+                message: format!("Aggregate does not support {:?}", query),
+            }),
+        }
+    }
+
+    async fn build(
+        mut self,
+        collection: Collection<Document>,
+        pagination: PaginationInfo,
+    ) -> Result<Cursor<Document>, mongodb::error::Error> {
+        let mut aggregate_options = AggregateOptions::default();
+        aggregate_options.allow_disk_use = self.options.allow_disk_use;
+        self.pipelines.push(doc! {"$skip": pagination.start as u32});
+        self.pipelines.push(doc! {"$limit": pagination.limit});
+
+        collection
+            .aggregate(self.pipelines, aggregate_options)
+            .await
     }
 }
 
 #[async_trait]
 pub trait QueryBuilder {
-    fn add_sub_query(&mut self, key: SubCommand, params: ParametersExpression);
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError>;
     async fn build(
         self,
         collection: Collection<Document>,
+        pagination: PaginationInfo,
     ) -> Result<Cursor<Document>, mongodb::error::Error>;
 }
 
-impl FromStr for MainCommand {
-    type Err = InterpreterError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "find" => Ok(MainCommand::Find(FindOptions::default())),
-            "aggregate" => Ok(MainCommand::Aggregate(AggregateOptions::default())),
-            "count" => Ok(MainCommand::Count(CountOptions::default())),
-            _ => Err(InterpreterError {
-                message: format!("Unknown command {}", s),
-            }),
-        }
-    }
-}
-
+#[derive(Debug)]
 pub enum SubCommand {
     Count,
-    Sort,
+    Sort(Option<Document>),
     AllowDiskUse,
 }
 
-impl FromStr for SubCommand {
-    type Err = InterpreterError;
+impl TryFrom<(String, ParametersExpression)> for SubCommand {
+    type Error = InterpreterError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let l_s = s.to_lowercase();
-        match l_s.as_str() {
-            "sort" => Ok(SubCommand::Sort),
-            "count" => Ok(SubCommand::Count),
-            "allowdiskuse" => Ok(SubCommand::AllowDiskUse),
+    fn try_from(
+        (command, params): (String, ParametersExpression),
+    ) -> Result<Self, InterpreterError> {
+        match command.to_lowercase().as_str() {
+            "count" => {
+                if params.params.is_empty() {
+                    return Ok(SubCommand::Count);
+                }
+                Err(InterpreterError {
+                    message: "Count command doesn't accept any parameter".to_string(),
+                })
+            }
+            "sort" => {
+                if params.params.len() > 1 {
+                    return Err(InterpreterError {
+                        message: "Sort command only accepts 1 parameter".to_string(),
+                    });
+                }
+                let sort_params = params.get_nth_of_type::<ObjectExpression>(0)?;
+
+                if let Bson::Document(doc) = to_interpter_error!(to_bson(&sort_params))? {
+                    return Ok(SubCommand::Sort(Some(doc)));
+                }
+                Err(InterpreterError {
+                    message: "Bson could not be converted to document".to_string(),
+                })
+            }
+            "allowdiskuse" => {
+                if !params.params.is_empty() {
+                    return Err(InterpreterError {
+                        message: "AllowDiskUse doesn't accept any parameter".to_string(),
+                    });
+                }
+
+                Ok(SubCommand::AllowDiskUse)
+            }
             _ => Err(InterpreterError {
-                message: format!("Unknown subcommand {}", s),
+                message: "Unknown subcommand".to_string(),
             }),
         }
     }
@@ -218,102 +380,14 @@ impl Connector for MongodbConnector {
         &self.info
     }
 
-    async fn get_data(
-        &self,
-        str: String,
-        PaginationInfo { start, limit }: PaginationInfo,
-    ) -> Result<DatabaseData> {
-        match InterpreterMongo::new(self).interpret(str.to_string()).await {
+    async fn get_data(&self, str: String, pagination: PaginationInfo) -> Result<DatabaseData> {
+        match InterpreterMongo::new(self, pagination)
+            .interpret(str.to_string())
+            .await
+        {
             Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err.message)),
         }
-        //let parsed_value = parse_mongo_query(&str)?;
-        //let db = self.client.database(&self.database);
-
-        //let ParsedValue::Query(CommandQuery {
-        //    collection_name,
-        //    mut command,
-        //    mut sub_commands,
-        //}) = parsed_value;
-
-        //let collection: mongodb::Collection<Document> = db.collection(&collection_name);
-        //return todo!();
-
-        //let mut cursor = match command.command_type {
-        //    MainCommand::Find => {
-        //        let mut opt = FindOptions::builder().batch_size(MAXIMUM_DOCUMENTS).build();
-        //        opt.skip = Some(start);
-        //        opt.limit = Some(limit as i64);
-        //        opt.projection = command.query.get(1).cloned();
-
-        //        let mut return_count = false;
-        //        while let Some(CommandQueryPair {
-        //            command_type,
-        //            mut query,
-        //        }) = sub_commands.pop()
-        //        {
-        //            match command_type {
-        //                SubCommand::Count => {
-        //                    return_count = true;
-        //                }
-        //                SubCommand::Sort => {
-        //                    opt.sort = Some(query.remove(0));
-        //                }
-        //                SubCommand::AllowDiskUse => {
-        //                    opt.allow_disk_use = Some(true);
-        //                }
-        //            }
-        //        }
-
-        //        if return_count {
-        //            let mut match_query = Document::new();
-        //            match_query.insert("$match", command.query.get(0));
-        //            collection
-        //                .aggregate(
-        //                    vec![match_query, doc! {"$count": "count"}],
-        //                    AggregateOptions::builder()
-        //                        .batch_size(MAXIMUM_DOCUMENTS)
-        //                        .build(),
-        //                )
-        //                .await?
-        //        } else {
-        //            collection.find(command.query[0].clone(), opt).await?
-        //        }
-        //    }
-        //    MainCommand::Aggregate => {
-        //        let opt = AggregateOptions::builder()
-        //            .batch_size(MAXIMUM_DOCUMENTS)
-        //            .build();
-        //        command.query.append(&mut vec![
-        //            doc! {"$skip": start as i32},
-        //            doc! {
-        //            "$limit": limit as i32
-        //            },
-        //        ]);
-        //        collection.aggregate(command.query, opt).await?
-        //    }
-        //    MainCommand::Count => {
-        //        let opt = AggregateOptions::builder()
-        //            .batch_size(MAXIMUM_DOCUMENTS)
-        //            .build();
-        //        let mut match_query = Document::new();
-        //        match_query.insert("$match", command.query.get(0));
-        //        collection
-        //            .aggregate(vec![match_query, doc! {"$count": "count"}], opt)
-        //            .await?
-        //    }
-        //};
-
-        //let mut result = DatabaseData(Vec::new());
-
-        //while let Some(doc) = cursor.try_next().await? {
-        //    result.push(serde_json::to_value(doc)?);
-        //    if result.len() >= MAXIMUM_DOCUMENTS as usize {
-        //        break;
-        //    }
-        //}
-
-        //Ok(result)
     }
 }
 

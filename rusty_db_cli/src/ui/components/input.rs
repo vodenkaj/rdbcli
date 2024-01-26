@@ -1,7 +1,7 @@
 use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 use crate::{
     application::Mode,
-    systems::event_system::{Event, EventHandler},
+    managers::event_manager::{Event, EventHandler},
 };
 use anyhow::Result;
 use crossterm::event;

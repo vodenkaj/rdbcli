@@ -1,6 +1,8 @@
 use crate::{
-    managers::window_manager::{WindowManager, WindowManagerBuilder},
-    systems::event_system::Event,
+    managers::{
+        event_manager::Event,
+        window_manager::{WindowManager, WindowManagerBuilder},
+    },
     ui::{
         layouts::get_table_layout,
         window::{OnInputInfo, WindowRenderInfo},

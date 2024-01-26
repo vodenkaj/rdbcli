@@ -1,72 +1,45 @@
-use mongodb::{bson::Document, options::FindOptions};
+use super::connector::{MongodbConnector, SubCommand};
+use crate::connectors::{
+    base::{DatabaseData, PaginationInfo},
+    mongodb::connector::{Command, QueryBuilder},
+};
+use mongodb::bson::Document;
 use rusty_db_cli_mongo::{
-    interpreter::Interpreter,
-    lexer::{LexerError, Literal},
+    interpreter::{Interpreter, InterpreterError},
+    lexer::Literal,
     parser::{
         CallExpression, Callee, Expression, Identifier, MemberExpression, ParametersExpression,
-        ParseError,
     },
 };
 use tokio_stream::StreamExt;
 
-use crate::connectors::{
-    base::DatabaseData,
-    mongodb::connector::{Command, QueryBuilder},
-};
-
-use super::connector::MongodbConnector;
-
-#[derive(Debug)]
-pub struct InterpreterError {
-    pub message: String,
-}
-
-impl From<LexerError> for InterpreterError {
-    fn from(err: LexerError) -> Self {
-        Self {
-            message: format!("{:?}", err),
-        }
-    }
-}
-
-impl From<Vec<LexerError>> for InterpreterError {
-    fn from(err: Vec<LexerError>) -> Self {
-        Self {
-            message: format!("{:?}", err),
-        }
-    }
-}
-
-impl From<ParseError> for InterpreterError {
-    fn from(err: ParseError) -> Self {
-        Self {
-            message: format!("{:?}", err),
-        }
-    }
-}
-
 pub struct InterpreterMongo<'a> {
     connector: &'a MongodbConnector,
     expressions: Vec<Expression>,
+    pagination: PaginationInfo,
 }
 
+#[macro_export]
 macro_rules! try_from {
     // Match against a type and a value
     (<$type:ty>($value:expr)) => {{
         match <$type>::try_from($value) {
             Ok(val) => Ok(val),
             Err(_) => Err(InterpreterError {
-                message: "TryFrom failed".to_string(),
+                message: format!("Failed to convert value to type {}", stringify!($type),),
             }),
         }
     }};
 }
 
+const MAXIMUM_DOCUMENTS: usize = 100;
+
 impl<'a> InterpreterMongo<'a> {
-    pub fn new(connector: &'a MongodbConnector) -> Self {
+    pub fn new(connector: &'a MongodbConnector, pagination: PaginationInfo) -> Self {
         Self {
             connector,
             expressions: vec![],
+            pagination,
         }
     }
 
@@ -99,24 +72,28 @@ impl<'a> InterpreterMongo<'a> {
             let db = self.connector.get_handle();
 
             let collection_name = self.try_get_next_literal::<String>()?;
-            let mut command_type: Command = self.try_get_next_literal::<String>()?.parse()?;
+            let command_type = self.try_get_next_literal::<String>()?;
             let params = self.consume::<ParametersExpression>()?;
+            let mut main_command = Command::try_from((command_type, params))?;
 
             while !self.expressions.is_empty() {
                 let command = self.try_get_next_literal::<String>()?;
                 let params = self.consume::<ParametersExpression>()?;
 
-                command_type.add_sub_query(command.parse()?, params);
+                main_command.add_sub_query(SubCommand::try_from((command, params))?)?;
             }
 
             let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
-            let mut cursor = command_type.build(collection).await.unwrap();
+            let mut cursor = main_command
+                .build(collection, self.pagination)
+                .await
+                .unwrap();
             let mut result: DatabaseData = DatabaseData(Vec::new());
 
             while let Some(doc) = cursor.try_next().await.unwrap() {
                 result.push(serde_json::to_value(doc).unwrap());
-                if result.len() >= 100 as usize {
+                if result.len() >= MAXIMUM_DOCUMENTS {
                     break;
                 }
             }
@@ -194,5 +171,3 @@ impl<'a> InterpreterMongo<'a> {
         }
     }
 }
-
-// Rules?

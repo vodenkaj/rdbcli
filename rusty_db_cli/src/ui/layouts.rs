@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     connectors::{base::TableData, mongodb::connector::MongodbConnectorBuilder},
-    systems::event_system::EventManager,
+    managers::event_manager::EventManager,
     widgets::scrollable_table::ScrollableTableState,
 };
 use ratatui::layout::Constraint;

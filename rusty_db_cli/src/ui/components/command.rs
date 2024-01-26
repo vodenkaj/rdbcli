@@ -1,5 +1,5 @@
 use super::base::{Component, ComponentCreateInfo};
-use crate::systems::event_system::{Event, EventHandler, ConnectionEvent};
+use crate::managers::event_manager::{ConnectionEvent, Event, EventHandler};
 use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::{style::Style, widgets::Paragraph};

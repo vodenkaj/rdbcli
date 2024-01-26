@@ -1,5 +1,5 @@
 use crate::{
-    systems::event_system::{Event, EventHandler},
+    managers::event_manager::{Event, EventHandler},
     ui::window::Window,
 };
 use anyhow::Result;
@@ -56,7 +56,7 @@ impl WindowManagerBuilder {
         self
     }
 
-    pub fn build(mut self) -> WindowManager {
+    pub fn build(self) -> WindowManager {
         WindowManager {
             windows: self.windows,
             focused_window: 0,

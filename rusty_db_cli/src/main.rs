@@ -8,7 +8,6 @@ use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::application::App;
 use std::{
     io::{self},
-    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };

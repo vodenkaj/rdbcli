@@ -1,8 +1,7 @@
 use super::components::base::{Component, ComponentDrawInfo};
 use crate::{
     application::Mode,
-    managers::window_manager::WindowManager,
-    systems::event_system::{Event, EventHandler, EventManager},
+    managers::event_manager::{Event, EventHandler, EventManager},
 };
 use anyhow::Result;
 use crossterm::event;
@@ -31,7 +30,7 @@ impl EventHandler for Window {
     fn on_event(&mut self, event: &Event) -> Result<()> {
         if let Event::OnInput(value) = &event {
             match value.key.code {
-                event::KeyCode::Char(ch) => {
+                event::KeyCode::Char(_ch) => {
                     if let Some(handler) = self.keybinds.remove(&value.key.code) {
                         handler(self);
                         self.keybinds.insert(value.key.code, handler);

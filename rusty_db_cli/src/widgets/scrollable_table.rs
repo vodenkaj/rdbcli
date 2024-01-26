@@ -256,7 +256,7 @@ impl ScrollableTableHandler {
         state: &mut ScrollableTableState,
         dir: VerticalDirection,
     ) {
-        let current_select = state.get_vertical_select();
+        let _current_select = state.get_vertical_select();
 
         match dir {
             VerticalDirection::Down => {

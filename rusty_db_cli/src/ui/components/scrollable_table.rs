@@ -8,7 +8,7 @@ use crate::{
         mongodb::connector::{DATE_TO_STRING_REGEX, OBJECT_ID_TO_STRING_REGEX},
     },
     log_error,
-    systems::event_system::{ConnectionEvent, Event, EventHandler},
+    managers::event_manager::{ConnectionEvent, Event, EventHandler},
     types::{HorizontalDirection, VerticalDirection},
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
@@ -134,7 +134,7 @@ impl ScrollableTableComponent {
         let offset = self.state.get_vertical_offset() + self.state.get_vertical_select();
         if offset == LIMIT as usize && matches!(dir, VerticalDirection::Down) {
             self.vertical_offset = 1;
-            self.pagination.start += LIMIT - 1;
+            self.pagination.start += (LIMIT - 1) as u64;
             self.state.reset();
             self.state
                 .set_horizontal_offset(self.horizontal_offset as usize);
@@ -143,13 +143,13 @@ impl ScrollableTableComponent {
         if offset == 1
             && matches!(dir, VerticalDirection::Up)
             && self.pagination.start > 0
-            && (self.pagination.start % (LIMIT - 1)).to_string() == "0"
+            && (self.pagination.start % (LIMIT - 1) as u64).to_string() == "0"
         {
             self.vertical_offset = (LIMIT - 1) as i32;
             self.state
                 .set_vertical_offset((self.vertical_offset - 10) as usize);
             self.state.set_vertical_select(10);
-            self.pagination.start -= LIMIT - 1;
+            self.pagination.start -= (LIMIT - 1) as u64;
             self.spawn_next_data();
         }
     }

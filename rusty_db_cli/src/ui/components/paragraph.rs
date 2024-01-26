@@ -1,7 +1,7 @@
-use crate::systems::event_system::{Event, EventHandler};
+use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
+use crate::managers::event_manager::{Event, EventHandler};
 use anyhow::Result;
 use ratatui::widgets::Paragraph;
-use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 
 pub struct ParagraphComponent {
     info: ComponentCreateInfo<String>,
@@ -33,7 +33,7 @@ impl Component for ParagraphComponent {
 }
 
 impl EventHandler for ParagraphComponent {
-    fn on_event(&mut self, event: &Event) -> Result<()> {
+    fn on_event(&mut self, _event: &Event) -> Result<()> {
         Ok(())
     }
 }

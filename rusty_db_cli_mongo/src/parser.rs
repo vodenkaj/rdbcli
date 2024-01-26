@@ -1,7 +1,16 @@
-use crate::lexer::{Literal, Token, TokenType};
+use crate::{
+    interpreter::InterpreterError,
+    lexer::{Literal, Token, TokenType},
+};
+use bson::{oid::ObjectId, Bson, DateTime as BsonDateTime};
+use chrono::{DateTime, NaiveDate, Utc};
 use dyn_clone::DynClone;
 use rusty_db_cli_derive_internals::TryFrom;
-use std::{convert::From, usize};
+use serde::{
+    ser::{Error, SerializeMap},
+    Serialize,
+};
+use std::{convert::From, str::FromStr, usize};
 
 /// Identifier              -> Literal | ObjectExpression | ArrayExpression
 /// Literal                 -> String | Number | Bool | Null
@@ -80,10 +89,21 @@ pub struct CallExpressionPrimary {
     pub callee: Callee,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, TryFrom)]
 pub enum Callee {
     Identifier(Identifier),
     Member(MemberExpression),
+}
+
+impl TryFrom<Callee> for Literal {
+    type Error = ();
+
+    fn try_from(value: Callee) -> Result<Self, Self::Error> {
+        if let Callee::Identifier(val) = value {
+            return Literal::try_from(val);
+        }
+        Err(())
+    }
 }
 
 impl Node for Callee {
@@ -113,6 +133,93 @@ pub enum CallExpression {
     Primary(CallExpressionPrimary),
     Recursive(Box<CallExpression>, ParametersExpression),
     Member(Box<MemberExpression>),
+}
+
+impl Serialize for CallExpression {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            CallExpression::Primary(call) => {
+                let key =
+                    String::try_from(Literal::try_from(call.callee.clone()).unwrap()).unwrap();
+
+                match key.as_str() {
+                    "DateTime" => {
+                        if call.params.params.len() > 1 {
+                            return Err(Error::custom("DateTime can only have one parameter"));
+                        }
+
+                        let value =
+                            String::try_from(call.params.get_nth_of_type::<Literal>(0).unwrap())
+                                .unwrap();
+
+                        match parse_date_string(&value) {
+                            Ok(date) => date.serialize(serializer),
+                            Err(err) => Err(Error::custom(err.message)),
+                        }
+                    }
+                    "ObjectId" => {
+                        if call.params.params.len() > 1 {
+                            return Err(Error::custom("ObjectId can only have one parameter"));
+                        }
+                        let value =
+                            String::try_from(call.params.get_nth_of_type::<Literal>(0).unwrap())
+                                .unwrap();
+
+                        ObjectId::from_str(&value).unwrap().serialize(serializer)
+                    }
+                    _ => Err(Error::custom("Invalid primary call expression.")),
+                }
+            }
+            _ => Err(Error::custom(
+                "Non primary call expression cannot be serialized",
+            )),
+        }
+    }
+}
+
+enum ParsedDate {
+    Naive(NaiveDate),
+    DateTime(DateTime<Utc>),
+}
+
+impl Serialize for ParsedDate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ParsedDate::Naive(naive) => {
+                let dt = naive.and_hms_opt(0, 0, 0).unwrap();
+                Bson::DateTime(BsonDateTime::from_chrono(
+                    DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc),
+                ))
+                .serialize(serializer)
+            }
+            ParsedDate::DateTime(datetime) => {
+                Bson::DateTime(BsonDateTime::from_chrono(*datetime)).serialize(serializer)
+            }
+        }
+    }
+}
+
+fn parse_date_string(date_str: &str) -> Result<ParsedDate, InterpreterError> {
+    // First, try to parse as NaiveDate
+    if let Ok(naive) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        return Ok(ParsedDate::Naive(naive));
+    }
+
+    // Next, try to parse as DateTime with a timezone
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(date_str) {
+        return Ok(ParsedDate::DateTime(datetime.with_timezone(&Utc)));
+    }
+
+    // If both attempts fail, return an error
+    Err(InterpreterError {
+        message: format!("Expected valid date string, got {} instead", date_str),
+    })
 }
 
 impl Node for CallExpression {
@@ -171,6 +278,21 @@ impl Node for MemberExpressionPrimary {
 #[derive(Debug, Clone)]
 pub struct ObjectExpression {
     pub properties: Vec<Property>,
+}
+
+impl Serialize for ObjectExpression {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+
+        for prop in self.properties.iter() {
+            map.serialize_entry(&prop.key, &prop.value)?;
+        }
+
+        map.end()
+    }
 }
 
 impl Node for ObjectExpression {
@@ -240,6 +362,32 @@ pub enum Identifier {
     Object(ObjectExpression),
     Array(ArrayExpression),
     Call(Box<CallExpression>),
+    Regex(RegexExpression),
+}
+
+#[derive(Debug, Clone)]
+pub struct RegexExpression {
+    regex: String,
+    flags: String,
+}
+
+impl Serialize for Identifier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Identifier::Literal(literal) => literal.serialize(serializer),
+            Identifier::Object(obj) => obj.serialize(serializer),
+            Identifier::Array(arr) => arr.serialize(serializer),
+            Identifier::Call(call) => call.serialize(serializer),
+            Identifier::Regex(regex) => bson::Regex {
+                pattern: regex.regex.clone(),
+                options: regex.flags.clone(),
+            }
+            .serialize(serializer),
+        }
+    }
 }
 
 impl Node for Identifier {
@@ -252,6 +400,10 @@ impl Node for Identifier {
             Identifier::Object(value) => value.get_tree(),
             Identifier::Array(value) => value.get_tree(),
             Identifier::Call(value) => value.get_tree(),
+            Identifier::Regex(_) => TreeNode {
+                name: "Regex".to_string(),
+                children: vec![],
+            },
         }
     }
 }
@@ -276,6 +428,30 @@ pub struct ParametersExpression {
     pub params: Vec<Identifier>,
 }
 
+impl ParametersExpression {
+    pub fn get_nth_of_type<T: TryFrom<Identifier>>(
+        &self,
+        nth: usize,
+    ) -> Result<T, InterpreterError> {
+        if nth >= self.params.len() {
+            return Err(InterpreterError {
+                message: format!(
+                    "Expected parameter at index {} but got {} parameters",
+                    nth,
+                    self.params.len()
+                ),
+            });
+        }
+
+        match T::try_from(self.params.get(nth).unwrap().clone()) {
+            Ok(value) => Ok(value),
+            Err(err) => Err(InterpreterError {
+                message: "Failed to convert parameter".to_string(),
+            }),
+        }
+    }
+}
+
 impl Node for ParametersExpression {
     fn get_tree(&self) -> TreeNode {
         TreeNode {
@@ -293,6 +469,15 @@ impl Node for ParametersExpression {
 #[derive(Clone, Debug)]
 pub struct ArrayExpression {
     pub elements: Vec<Identifier>,
+}
+
+impl Serialize for ArrayExpression {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.elements.serialize(serializer)
+    }
 }
 
 impl Node for ArrayExpression {
@@ -386,7 +571,15 @@ impl Parser {
 
         let mut args = Vec::new();
         while !self.check(TokenType::RightBracket)? {
-            args.push(self.identifier_expression()?);
+            let identifier = self.identifier_expression()?;
+
+            if self.check(TokenType::LeftParen)? {
+                args.push(Identifier::Call(Box::new(
+                    self.call_expression(Callee::Identifier(identifier))?,
+                )));
+            } else {
+                args.push(identifier);
+            }
 
             if !self.check(TokenType::RightBracket)? {
                 self.consume(TokenType::Comma)?;
@@ -404,6 +597,13 @@ impl Parser {
         Ok(ArrayExpression { elements: args })
     }
 
+    fn regex_expression(&mut self) -> Result<Identifier, ParseError> {
+        let regex = self.advance()?.literal.unwrap().to_string();
+        let flags = self.advance()?.literal.unwrap().to_string();
+
+        Ok(Identifier::Regex(RegexExpression { regex, flags }))
+    }
+
     fn identifier_expression(&mut self) -> Result<Identifier, ParseError> {
         let value = match self.peek()?.r#type {
             TokenType::Identifier
@@ -413,6 +613,7 @@ impl Parser {
             | TokenType::Null => self.literal_expression().ok(),
             TokenType::LeftBrace => Some(Identifier::Object(self.object_expression()?)),
             TokenType::LeftBracket => Some(Identifier::Array(self.array_expression()?)),
+            TokenType::Regex => Some(self.regex_expression()?),
             _ => None,
         };
 
