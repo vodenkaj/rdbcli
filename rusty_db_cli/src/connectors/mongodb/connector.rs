@@ -173,11 +173,14 @@ pub struct CountQuery {
     options: AggregateOptions,
 }
 
+// TODO: Distinct
 pub enum Command {
     Find(FindQuery),
     Count(CountQuery),
     Aggregate(AggregateQuery),
 }
+
+// TODO: Update queries
 
 #[async_trait]
 impl QueryBuilder for Command {
@@ -239,7 +242,7 @@ impl QueryBuilder for FindQuery {
             collection.aggregate(pipelines, aggregate_options).await
         } else {
             self.options.skip = Some(pagination.start);
-            self.options.limit = Some(pagination.limit);
+            self.options.limit = Some(pagination.limit as i64);
             collection.find(self.filter, self.options).await
         }
     }
@@ -311,6 +314,7 @@ pub trait QueryBuilder {
     ) -> Result<Cursor<Document>, mongodb::error::Error>;
 }
 
+// TODO: Limit, Skip
 #[derive(Debug)]
 pub enum SubCommand {
     Count,

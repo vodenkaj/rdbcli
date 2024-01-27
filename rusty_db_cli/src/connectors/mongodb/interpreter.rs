@@ -45,6 +45,11 @@ impl<'a> InterpreterMongo<'a> {
 
     pub async fn interpret(mut self, data: String) -> Result<DatabaseData, InterpreterError> {
         let mut program = Interpreter::new().tokenize(data)?.parse()?;
+        // Our parser performs reverse-ordered tokenization and parsing,
+        // -> it constructs an output array where tokens are stored in reverse order
+        // compared to their original sequence in the input. And we want to execute the
+        // first line first, so we reverse the array.
+        program.body.reverse();
 
         if let Some(expression) = program.body.pop() {
             return match expression {
