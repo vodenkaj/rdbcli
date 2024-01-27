@@ -1,7 +1,8 @@
 use core::fmt;
+use std::fmt::Debug;
+
 use rusty_db_cli_derive_internals::TryFrom;
 use serde::{ser::Serializer, Serialize};
-use std::fmt::Debug;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenType {

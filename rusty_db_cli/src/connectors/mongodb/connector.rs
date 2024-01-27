@@ -1,14 +1,10 @@
-use super::interpreter::InterpreterMongo;
-use crate::{
-    connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
-    try_from,
-    widgets::scrollable_table::Row,
-};
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mongodb::{
     bson::{doc, to_bson, Bson, Document},
-    options::{AggregateOptions, ClientOptions, CountOptions, FindOptions},
+    options::{AggregateOptions, ClientOptions, FindOptions},
     Client, Collection, Cursor, Database,
 };
 use rusty_db_cli_mongo::{
@@ -16,7 +12,13 @@ use rusty_db_cli_mongo::{
     parser::{ArrayExpression, ObjectExpression, ParametersExpression},
     to_interpter_error,
 };
-use std::collections::{HashMap, HashSet};
+
+use super::interpreter::InterpreterMongo;
+use crate::{
+    connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
+    try_from,
+    widgets::scrollable_table::Row,
+};
 
 pub struct MongodbConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -145,13 +147,6 @@ impl TryFrom<(String, ParametersExpression)> for Command {
             }),
         }
     }
-}
-
-#[derive(Debug)]
-pub enum MainCommand {
-    Find(Document, FindOptions),
-    Aggregate(Vec<Document>, AggregateOptions),
-    Count(Document, CountOptions),
 }
 
 #[derive(Default)]

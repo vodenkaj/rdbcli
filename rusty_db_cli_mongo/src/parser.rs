@@ -1,7 +1,5 @@
-use crate::{
-    interpreter::InterpreterError,
-    lexer::{Literal, Token, TokenType},
-};
+use std::{convert::From, str::FromStr, usize};
+
 use bson::{oid::ObjectId, Bson, DateTime as BsonDateTime};
 use chrono::{DateTime, NaiveDate, Utc};
 use dyn_clone::DynClone;
@@ -10,7 +8,11 @@ use serde::{
     ser::{Error, SerializeMap},
     Serialize,
 };
-use std::{convert::From, str::FromStr, usize};
+
+use crate::{
+    interpreter::InterpreterError,
+    lexer::{Literal, Token, TokenType},
+};
 
 /// Identifier              -> Literal | ObjectExpression | ArrayExpression
 /// Literal                 -> String | Number | Bool | Null
@@ -445,7 +447,7 @@ impl ParametersExpression {
 
         match T::try_from(self.params.get(nth).unwrap().clone()) {
             Ok(value) => Ok(value),
-            Err(err) => Err(InterpreterError {
+            Err(_) => Err(InterpreterError {
                 message: "Failed to convert parameter".to_string(),
             }),
         }

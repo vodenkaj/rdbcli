@@ -1,3 +1,7 @@
+use std::{env, sync::Arc};
+
+use ratatui::layout::Constraint;
+
 use super::{
     components::{
         base::ComponentCreateInfo,
@@ -11,8 +15,6 @@ use crate::{
     managers::event_manager::EventManager,
     widgets::scrollable_table::ScrollableTableState,
 };
-use ratatui::layout::Constraint;
-use std::{env, sync::Arc};
 
 pub async fn get_table_layout() -> Window {
     let event_manager = EventManager::new();

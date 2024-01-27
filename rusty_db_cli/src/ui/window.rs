@@ -1,8 +1,9 @@
-use super::components::base::{Component, ComponentDrawInfo};
-use crate::{
-    application::Mode,
-    managers::event_manager::{Event, EventHandler, EventManager},
+use std::{
+    collections::HashMap,
+    io::Stdout,
+    sync::{Arc, Mutex},
 };
+
 use anyhow::Result;
 use crossterm::event;
 use ratatui::{
@@ -10,10 +11,11 @@ use ratatui::{
     layout::{Constraint, Layout},
     Terminal,
 };
-use std::{
-    collections::HashMap,
-    io::Stdout,
-    sync::{Arc, Mutex},
+
+use super::components::base::{Component, ComponentDrawInfo};
+use crate::{
+    application::Mode,
+    managers::event_manager::{Event, EventHandler, EventManager},
 };
 
 pub struct WindowRenderInfo {

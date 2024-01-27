@@ -1,5 +1,6 @@
-use once_cell::sync::Lazy;
 use std::{io::Read, os::unix::prelude::FileExt, process::Command};
+
+use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 
 pub struct ExternalEditor {

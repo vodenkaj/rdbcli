@@ -1,3 +1,12 @@
+use std::{
+    fmt::Display,
+    io::Stdout,
+    sync::{Arc, Mutex},
+};
+
+use crossterm::event;
+use ratatui::{backend::CrosstermBackend, Terminal};
+
 use crate::{
     managers::{
         event_manager::Event,
@@ -7,13 +16,6 @@ use crate::{
         layouts::get_table_layout,
         window::{OnInputInfo, WindowRenderInfo},
     },
-};
-use crossterm::event;
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{
-    fmt::Display,
-    io::Stdout,
-    sync::{Arc, Mutex},
 };
 
 #[derive(Clone, Copy)]

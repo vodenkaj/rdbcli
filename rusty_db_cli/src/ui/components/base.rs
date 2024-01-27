@@ -1,9 +1,11 @@
-use crate::managers::event_manager::{Event, EventHandler};
+use std::sync::mpsc::Sender;
+
 use ratatui::{
     layout::{Constraint, Rect},
     Frame,
 };
-use std::sync::mpsc::Sender;
+
+use crate::managers::event_manager::{Event, EventHandler};
 
 pub struct ComponentCreateInfo<T> {
     pub id: usize,

@@ -1,9 +1,10 @@
-use super::base::{Component, ComponentCreateInfo};
-use crate::managers::event_manager::{ConnectionEvent, Event, EventHandler};
 use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::{style::Style, widgets::Paragraph};
 use regex::Regex;
+
+use super::base::{Component, ComponentCreateInfo};
+use crate::managers::event_manager::{ConnectionEvent, Event, EventHandler};
 
 #[derive(Default, Clone)]
 pub enum Severity {

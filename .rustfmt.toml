@@ -1,0 +1,32 @@
+unstable_features = true
+
+# Use the default Rust edition
+edition = "2021"
+
+# Format code in a more compact way
+max_width = 100
+hard_tabs = false
+
+# Use visual indentation for function calls and chains
+indent_style = "Block"
+
+# Place imports in a single, alphabetically sorted group
+imports_granularity = "Crate"
+reorder_imports = true
+reorder_modules = true
+
+# Enforce documentation comments
+normalize_doc_attributes = true
+
+# Control the ordering of items
+group_imports = "StdExternalCrate"
+
+# Enforce blank lines after opening braces and before closing braces
+blank_lines_upper_bound = 1
+blank_lines_lower_bound = 0
+
+# Control spaces around various operators and keywords
+spaces_around_ranges = false
+
+# Use Unix-style line endings
+newline_style = "Unix"

@@ -1,8 +1,3 @@
-use super::connector::{MongodbConnector, SubCommand};
-use crate::connectors::{
-    base::{DatabaseData, PaginationInfo},
-    mongodb::connector::{Command, QueryBuilder},
-};
 use mongodb::bson::Document;
 use rusty_db_cli_mongo::{
     interpreter::{Interpreter, InterpreterError},
@@ -12,6 +7,12 @@ use rusty_db_cli_mongo::{
     },
 };
 use tokio_stream::StreamExt;
+
+use super::connector::{MongodbConnector, SubCommand};
+use crate::connectors::{
+    base::{DatabaseData, PaginationInfo},
+    mongodb::connector::{Command, QueryBuilder},
+};
 
 pub struct InterpreterMongo<'a> {
     connector: &'a MongodbConnector,

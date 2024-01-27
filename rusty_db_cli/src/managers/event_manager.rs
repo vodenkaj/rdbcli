@@ -1,3 +1,15 @@
+use std::{
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use anyhow::Result;
+use mongodb::event::command::ConnectionInfo;
+use tokio::{task::JoinHandle, time};
+
 use crate::{
     connectors::base::DatabaseData,
     managers::window_manager::WindowCommand,
@@ -6,16 +18,6 @@ use crate::{
         window::OnInputInfo,
     },
 };
-use anyhow::Result;
-use mongodb::event::command::ConnectionInfo;
-use std::{
-    sync::{
-        mpsc::{channel, Receiver, Sender},
-        Arc, Mutex,
-    },
-    time::Duration,
-};
-use tokio::{task::JoinHandle, time};
 
 pub enum ConnectionEvent {
     Add(ConnectionInfo),

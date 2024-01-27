@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
+use anyhow::Result;
+
 use crate::{
     managers::event_manager::{Event, EventHandler},
     ui::window::Window,
 };
-use anyhow::Result;
-use std::collections::HashMap;
 
 pub enum WindowCommand {
     SetFocusedWindow(usize),

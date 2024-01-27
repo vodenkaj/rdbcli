@@ -1,7 +1,8 @@
-use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
-use crate::managers::event_manager::{Event, EventHandler};
 use anyhow::Result;
 use ratatui::widgets::Paragraph;
+
+use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
+use crate::managers::event_manager::{Event, EventHandler};
 
 pub struct ParagraphComponent {
     info: ComponentCreateInfo<String>,

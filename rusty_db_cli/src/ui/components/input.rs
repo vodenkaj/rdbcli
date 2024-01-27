@@ -1,11 +1,12 @@
+use anyhow::Result;
+use crossterm::event;
+use ratatui::widgets::Paragraph;
+
 use super::base::{Component, ComponentCreateInfo, ComponentDrawInfo};
 use crate::{
     application::Mode,
     managers::event_manager::{Event, EventHandler},
 };
-use anyhow::Result;
-use crossterm::event;
-use ratatui::widgets::Paragraph;
 
 pub struct InputComponent {
     info: ComponentCreateInfo<String>,

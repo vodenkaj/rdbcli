@@ -1,3 +1,14 @@
+use std::{cmp, sync::Arc};
+
+use anyhow::Result;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
+use crossterm::event;
+use mongodb::bson::Bson;
+use rand::Rng;
+use ratatui::{layout::Constraint, widgets::Paragraph};
+use regex::Regex;
+use tokio::sync::Mutex;
+
 use super::{
     base::{Component, ComponentCreateInfo, ComponentDrawInfo},
     command::{Message, Severity},
@@ -13,15 +24,6 @@ use crate::{
     utils::external_editor::EXTERNAL_EDITOR,
     widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
 };
-use anyhow::Result;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
-use crossterm::event;
-use mongodb::bson::Bson;
-use rand::Rng;
-use ratatui::{layout::Constraint, widgets::Paragraph};
-use regex::Regex;
-use std::{cmp, sync::Arc};
-use tokio::sync::Mutex;
 
 pub struct ScrollableTableComponent {
     info: ComponentCreateInfo<TableData<'static>>,

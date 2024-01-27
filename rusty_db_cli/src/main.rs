@@ -1,4 +1,10 @@
 use core::time;
+use std::{
+    io::{self},
+    thread,
+    time::Duration,
+};
+
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
@@ -6,11 +12,6 @@ use crossterm::{
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::application::App;
-use std::{
-    io::{self},
-    thread,
-    time::Duration,
-};
 
 #[tokio::main]
 async fn main() {
