@@ -10,7 +10,7 @@ use tokio_stream::StreamExt;
 
 use super::connector::{MongodbConnector, SubCommand};
 use crate::connectors::{
-    base::{DatabaseData, PaginationInfo},
+    base::{DatabaseData, DatabaseValue, PaginationInfo},
     mongodb::connector::{Command, QueryBuilder},
 };
 
@@ -98,7 +98,7 @@ impl<'a> InterpreterMongo<'a> {
             let mut result: DatabaseData = DatabaseData(Vec::new());
 
             while let Some(doc) = cursor.try_next().await.unwrap() {
-                result.push(serde_json::to_value(doc).unwrap());
+                result.push(try_from!(<DatabaseValue>(doc))?);
                 if result.len() >= MAXIMUM_DOCUMENTS {
                     break;
                 }

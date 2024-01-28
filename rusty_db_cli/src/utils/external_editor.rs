@@ -1,10 +1,23 @@
 use std::{io::Read, os::unix::prelude::FileExt, process::Command};
 
 use once_cell::sync::Lazy;
-use tempfile::NamedTempFile;
 
 pub struct ExternalEditor {
     editor: String,
+}
+
+pub enum FileType {
+    Json,
+    Javascript,
+}
+
+impl FileType {
+    fn get_ext(&self) -> &str {
+        match self {
+            FileType::Json => ".json",
+            FileType::Javascript => ".js",
+        }
+    }
 }
 
 impl ExternalEditor {
@@ -14,8 +27,10 @@ impl ExternalEditor {
         }
     }
 
-    pub fn edit_value(&self, value: &mut String) -> anyhow::Result<String> {
-        let file = NamedTempFile::new()?;
+    pub fn edit_value(&self, value: &mut String, file_type: FileType) -> anyhow::Result<String> {
+        let file = tempfile::Builder::new()
+            .suffix(file_type.get_ext())
+            .tempfile()?;
         let mut handle = file.reopen()?;
         handle.write_all_at(value.as_bytes(), 0)?;
         Command::new(&self.editor)

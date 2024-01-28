@@ -13,6 +13,10 @@ pub fn try_from_variant(args: TokenStream) -> TokenStream {
     if let syn::Data::Enum(data_enum) = &input.data {
         for variant in &data_enum.variants {
             let variant_name = &variant.ident;
+
+            if variant.fields.is_empty() {
+                continue;
+            }
             let first_variant = variant.fields.iter().next().unwrap();
 
             try_from_fc.extend(quote! {
