@@ -106,6 +106,7 @@ pub struct Lexer {
     source: String,
     tokens: Vec<Token>,
     start: usize,
+    end: usize,
     current: usize,
     line: usize,
     errors: Vec<LexerError>,
@@ -114,6 +115,7 @@ pub struct Lexer {
 impl Lexer {
     pub fn new(source: String) -> Self {
         Self {
+            end: source.chars().count(),
             source,
             tokens: Vec::new(),
             start: 0,
@@ -160,9 +162,9 @@ impl Lexer {
             ':' => self.add_token(TokenType::Colon, None),
             '"' => {
                 self.string();
-                let mut str = self.get_current_lexeme();
-                str.remove(0);
-                str.pop();
+                // We are using serde_json::from_str to parse the string,
+                // because it handle escaped characters correctly
+                let str = serde_json::from_str(&self.get_current_lexeme()).unwrap();
                 self.add_token(TokenType::String, Some(Literal::String(str)))
             }
             '/' => {
@@ -172,6 +174,8 @@ impl Lexer {
                 str.pop();
                 self.add_token(TokenType::Regex, Some(Literal::String(str)));
 
+                // TODO: ugly
+                self.start = self.current;
                 self.regex_flags();
                 let flags = self.get_current_lexeme();
                 self.add_token(TokenType::RegexFlags, Some(Literal::String(flags)))
@@ -185,7 +189,7 @@ impl Lexer {
                             self.get_current_lexeme().parse::<f32>().unwrap(),
                         )),
                     );
-                } else if c.is_ascii_alphabetic() || (c == '$' || c == '_') {
+                } else if c.is_alphabetic() || (c == '$' || c == '_') {
                     self.identifier();
 
                     match self.get_current_lexeme().as_str() {
@@ -223,7 +227,25 @@ impl Lexer {
     }
 
     fn get_current_lexeme(&self) -> String {
-        self.source[self.start..self.current].to_string()
+        let mut start_byte = None;
+        let mut end_byte = None;
+        for (idx, (byte_pos, _)) in self.source.char_indices().enumerate() {
+            if idx == self.start {
+                start_byte = Some(byte_pos);
+            }
+            if idx == self.current {
+                end_byte = Some(byte_pos);
+                break;
+            }
+        }
+
+        let lexeme = if let (Some(start_byte), Some(end_byte)) = (start_byte, end_byte) {
+            self.source[start_byte..end_byte].to_string()
+        } else {
+            String::new()
+        };
+
+        lexeme
     }
 
     fn is_espaced_char_or_espace(&mut self, c: char) -> bool {
@@ -327,10 +349,16 @@ impl Lexer {
 
     fn advance(&mut self) -> char {
         self.current += 1;
-        self.source.chars().nth(self.current - 1).unwrap()
+        for (idx, char) in self.source.chars().enumerate() {
+            if idx == self.current - 1 {
+                return char;
+            }
+        }
+
+        panic!("Unexpected end of input");
     }
 
     fn is_at_end(&self) -> bool {
-        self.current >= self.source.len()
+        self.current >= self.end
     }
 }
