@@ -41,7 +41,7 @@ impl ExternalEditor {
         let mut edited_value = String::new();
         handle.read_to_string(&mut edited_value)?;
         file.close()?;
-        *value = edited_value.trim().to_string();
+        *value = edited_value.to_string();
 
         Ok(value.to_string())
     }
