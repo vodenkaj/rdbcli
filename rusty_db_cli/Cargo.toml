@@ -22,3 +22,4 @@ tokio = "1.29.1"
 tokio-stream = "0.1.14"
 rusty_db_cli_mongo = { path = "../rusty_db_cli_mongo" }
 rusty_db_cli_derive_internals = { path = "../rusty_db_cli_derive_internals" }
+home = "0.5.9"

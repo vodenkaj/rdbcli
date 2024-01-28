@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashSet, sync::Arc};
+use std::{cmp, collections::HashSet, fs::File, io::Read, sync::Arc};
 
 use anyhow::Result;
 use crossterm::event;
@@ -19,7 +19,7 @@ use crate::{
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
     try_from,
     types::{HorizontalDirection, VerticalDirection},
-    utils::external_editor::{FileType, EXTERNAL_EDITOR},
+    utils::external_editor::{FileType, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
     widgets::scrollable_table::{Row, ScrollableTable, ScrollableTableState},
 };
 
@@ -43,9 +43,15 @@ impl ScrollableTableComponent {
         state: ScrollableTableState,
         conn: Arc<Mutex<dyn Connector>>,
     ) -> Self {
+        let mut handle =
+            File::open(MONGO_QUERY_FILE.to_string()).expect("Failed to read query file");
+        let mut query = String::new();
+        handle
+            .read_to_string(&mut query)
+            .expect("Failed to read query file");
         Self {
             is_fetching: false,
-            query: String::new(),
+            query,
             data: DatabaseData(Vec::new()),
             info,
             state,
@@ -273,9 +279,7 @@ impl EventHandler for ScrollableTableComponent {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
                             let original_query = self.query.clone();
-                            EXTERNAL_EDITOR
-                                .edit_value(&mut self.query, FileType::Javascript)
-                                .unwrap();
+                            self.query = EXTERNAL_EDITOR.edit_file(&MONGO_QUERY_FILE).unwrap();
                             if original_query == self.query {
                                 return Ok(());
                             }
