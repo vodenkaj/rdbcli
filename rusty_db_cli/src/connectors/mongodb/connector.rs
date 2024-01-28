@@ -36,7 +36,7 @@ impl MongodbConnectorBuilder {
     pub async fn build(self) -> Result<MongodbConnector> {
         let info = self.info.unwrap();
         let client_opts = ClientOptions::parse(info.uri.clone()).await?;
-        let client = Client::with_options(client_opts)?;
+        let client = Client::with_options(client_opts.clone())?;
 
         Ok(MongodbConnector {
             info,
@@ -376,7 +376,7 @@ impl Connector for MongodbConnector {
         self.database = String::from(database);
     }
 
-    async fn get_info(&self) -> &crate::connectors::base::ConnectorInfo {
+    fn get_info(&self) -> &crate::connectors::base::ConnectorInfo {
         &self.info
     }
 
