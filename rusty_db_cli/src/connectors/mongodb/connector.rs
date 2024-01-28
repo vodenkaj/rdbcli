@@ -220,10 +220,11 @@ impl QueryBuilder for FindQuery {
         pagination: PaginationInfo,
     ) -> Result<Cursor<Document>, mongodb::error::Error> {
         if self.count {
-            let mut pipelines = vec![doc! {"$count": "count"}];
+            let mut pipelines = Vec::new();
             if self.filter.is_some() {
-                pipelines.push(self.filter.unwrap());
+                pipelines.push(doc! { "$match": self.filter.unwrap()});
             };
+            pipelines.push(doc! {"$count": "count"});
 
             let mut aggregate_options = AggregateOptions::default();
             aggregate_options.allow_disk_use = self.options.allow_disk_use;
