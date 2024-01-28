@@ -1,12 +1,10 @@
-use std::{cmp, sync::Arc};
+use std::{cmp, collections::HashSet, sync::Arc};
 
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use crossterm::event;
-use mongodb::bson::Bson;
 use rand::Rng;
 use ratatui::{layout::Constraint, widgets::Paragraph};
-use regex::Regex;
+use rusty_db_cli_mongo::interpreter::InterpreterError;
 use tokio::sync::Mutex;
 
 use super::{
@@ -14,15 +12,15 @@ use super::{
     command::{Message, Severity},
 };
 use crate::{
-    connectors::{
-        base::{Connector, DatabaseData, PaginationInfo, TableData, LIMIT},
-        mongodb::connector::{DATE_TO_STRING_REGEX, OBJECT_ID_TO_STRING_REGEX},
+    connectors::base::{
+        Connector, DatabaseData, DatabaseValue, Object, PaginationInfo, TableData, LIMIT,
     },
     log_error,
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
+    try_from,
     types::{HorizontalDirection, VerticalDirection},
-    utils::external_editor::EXTERNAL_EDITOR,
-    widgets::scrollable_table::{ScrollableTable, ScrollableTableState},
+    utils::external_editor::{FileType, EXTERNAL_EDITOR},
+    widgets::scrollable_table::{Row, ScrollableTable, ScrollableTableState},
 };
 
 pub struct ScrollableTableComponent {
@@ -275,7 +273,9 @@ impl EventHandler for ScrollableTableComponent {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
                             let original_query = self.query.clone();
-                            EXTERNAL_EDITOR.edit_value(&mut self.query).unwrap();
+                            EXTERNAL_EDITOR
+                                .edit_value(&mut self.query, FileType::Javascript)
+                                .unwrap();
                             if original_query == self.query {
                                 return Ok(());
                             }
@@ -298,12 +298,15 @@ impl EventHandler for ScrollableTableComponent {
                         }
                         event::KeyCode::Enter => {
                             if self.data.len() > 0 {
-                                let mut data = self.data[self.state.get_vertical_select() - 1
+                                let data = self.data[self.state.get_vertical_select() - 1
                                     + self.state.get_vertical_offset()]
                                 .clone();
-                                resolve(&mut data);
-                                EXTERNAL_EDITOR
-                                    .edit_value(&mut serde_json::to_string_pretty(&data)?)?;
+                                EXTERNAL_EDITOR.edit_value(
+                                    &mut serde_json::to_string_pretty(
+                                        &Into::<serde_json::Value>::into(data),
+                                    )?,
+                                    FileType::Json,
+                                )?;
                             }
                         }
                         _ => {}
@@ -320,45 +323,48 @@ impl EventHandler for ScrollableTableComponent {
     }
 }
 
-fn resolve(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::String(str) => {
-            if let Some(result) = Regex::new(DATE_TO_STRING_REGEX).unwrap().captures(str) {
-                let raw_date = result.get(2).unwrap().as_str().to_string();
+impl<'a> From<DatabaseData> for TableData<'a> {
+    fn from(value: DatabaseData) -> Self {
+        let mut header = Row::default();
+        let mut body = Vec::new();
 
-                let date_time = match NaiveDate::parse_from_str(&raw_date, "%Y-%m-%d") {
-                    Ok(parsed_date) => {
-                        // Create a NaiveDateTime at midnight for the given date
-                        NaiveDateTime::new(
-                            parsed_date,
-                            NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
-                        )
+        if !value.is_empty() {
+            let mut unique_keys = value
+                .iter()
+                .fold(HashSet::new(), |mut acc, value| {
+                    if let DatabaseValue::Object(obj) = value {
+                        acc.extend(obj.keys().cloned());
                     }
-                    Err(e) => {
-                        panic!("Failed to parse date: {}", e);
-                    }
-                };
 
-                let date = DateTime::from_timestamp(date_time.timestamp(), 0).unwrap();
-                *value = serde_json::from_str(&date.to_rfc3339()).unwrap();
-            } else if let Some(result) =
-                Regex::new(OBJECT_ID_TO_STRING_REGEX).unwrap().captures(str)
-            {
-                let raw_object_id = result.get(2).unwrap().as_str().to_string();
-                *value = serde_json::from_str(&raw_object_id).unwrap();
-            }
+                    acc
+                })
+                .into_iter()
+                .collect::<Vec<String>>();
+            unique_keys.sort_by(|a, b| a.len().cmp(&b.len()));
+
+            body = value
+                .into_iter()
+                .map(|value| {
+                    //TODO: Error handling
+                    let mut obj = try_from!(<Object>(value)).unwrap();
+
+                    Row::new(unique_keys.iter().fold(Vec::new(), |mut acc, key| {
+                        if obj.contains_key(key) {
+                            acc.push(
+                                Into::<serde_json::Value>::into(obj.remove(key).unwrap())
+                                    .to_string(),
+                            );
+                        } else {
+                            acc.push("".to_string());
+                        }
+
+                        acc
+                    }))
+                })
+                .collect::<Vec<Row>>();
+            header = Row::new(unique_keys.clone());
         }
-        serde_json::Value::Array(array) => array.iter_mut().for_each(resolve),
-        serde_json::Value::Object(obj) => obj.values_mut().for_each(|v| {
-            if v.is_object() {
-                let bson = Bson::try_from(v.clone()).unwrap();
-                if let Some(date) = bson.as_datetime() {
-                    *v = serde_json::Value::String(date.try_to_rfc3339_string().unwrap());
-                } else {
-                    resolve(v);
-                }
-            }
-        }),
-        _ => {}
+
+        TableData { header, rows: body }
     }
 }
