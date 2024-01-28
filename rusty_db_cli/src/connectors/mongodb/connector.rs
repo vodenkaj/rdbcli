@@ -1,7 +1,6 @@
-use std::collections::{HashMap, HashSet};
-
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::TimeZone;
 use mongodb::{
     bson::{doc, to_bson, Bson, Document},
     options::{AggregateOptions, ClientOptions, FindOptions},
@@ -15,9 +14,10 @@ use rusty_db_cli_mongo::{
 
 use super::interpreter::InterpreterMongo;
 use crate::{
-    connectors::base::{Connector, ConnectorInfo, DatabaseData, PaginationInfo, TableData},
+    connectors::base::{
+        Connector, ConnectorInfo, DatabaseData, DatabaseValue, Object, PaginationInfo,
+    },
     try_from,
-    widgets::scrollable_table::Row,
 };
 
 pub struct MongodbConnectorBuilder {
@@ -51,12 +51,6 @@ pub struct MongodbConnector {
     pub client: Client,
     database: String,
 }
-
-// TODO: Replace ALL regexes - they does not work in certain cases
-pub const KEY_TO_STRING_REGEX: &str = r"(\$?[A-z0-9]+)(?::)";
-pub const REGEX_TO_STRING_REGEX: &str = r"\/([A-z0-9]+)(?:\/)";
-pub const DATE_TO_STRING_REGEX: &str = r##"(Date\(([A-z0-9-\/]+?)\))"##;
-pub const OBJECT_ID_TO_STRING_REGEX: &str = r##"(ObjectId\(([A-z0-9-\/]+?)\))"##;
 
 impl TryFrom<(String, ParametersExpression)> for Command {
     type Error = InterpreterError;
@@ -247,7 +241,10 @@ impl QueryBuilder for FindQuery {
 impl QueryBuilder for CountQuery {
     fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
         match query {
-            SubCommand::AllowDiskUse => todo!(),
+            SubCommand::AllowDiskUse => {
+                self.options.allow_disk_use = Some(true);
+                Ok(())
+            }
             _ => Err(InterpreterError {
                 message: "Count only supports AllowDiskUse".to_string(),
             }),
@@ -276,7 +273,10 @@ impl QueryBuilder for AggregateQuery {
     fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
         match query {
             SubCommand::Count => todo!(),
-            SubCommand::AllowDiskUse => todo!(),
+            SubCommand::AllowDiskUse => {
+                self.options.allow_disk_use = Some(true);
+                Ok(())
+            }
             _ => Err(InterpreterError {
                 message: format!("Aggregate does not support {:?}", query),
             }),
@@ -390,66 +390,44 @@ impl Connector for MongodbConnector {
     }
 }
 
-impl<'a> From<DatabaseData> for TableData<'a> {
-    fn from(value: DatabaseData) -> Self {
-        let mut header = Row::default();
-        let mut body = Vec::new();
+impl TryFrom<Document> for DatabaseValue {
+    type Error = ();
 
-        if !value.is_empty() {
-            let mut unique_keys = HashSet::new();
-            let keys: Vec<String> = value
-                .iter()
-                .fold(Vec::new(), |mut acc, value| {
-                    let keys: Vec<String> = value
-                        .as_object()
-                        .unwrap()
-                        .keys()
-                        .filter(|key| !unique_keys.contains(*key))
-                        .cloned()
-                        .collect();
-                    acc.extend::<Vec<String>>(keys.clone());
-                    unique_keys.extend(keys);
-                    acc
-                })
-                .to_vec();
-            {
-                header = Row::new(keys.clone());
-                body = value
-                    .iter()
-                    .cloned()
-                    .map(|x| {
-                        let mut cloned = x.clone();
-                        let obj = cloned.as_object_mut().unwrap();
-                        let mut parsed_obj = HashMap::new();
-                        keys.iter().for_each(|key| {
-                            let mut parsed_value = String::new();
-                            if let Some(value) = obj.get(key) {
-                                parsed_value = match value {
-                                    serde_json::Value::Object(v) => {
-                                        let bson = Bson::try_from(v.clone()).unwrap();
-                                        if let Some(date) = bson.as_datetime() {
-                                            date.try_to_rfc3339_string().unwrap()
-                                        } else if let Some(object_id) = bson.as_object_id() {
-                                            object_id.to_hex()
-                                        } else {
-                                            value.to_string()
-                                        }
-                                    }
-                                    v => v.to_string(),
-                                };
-                            }
-                            parsed_obj.insert(key, parsed_value);
-                        });
-                        Row::new(
-                            keys.iter()
-                                .filter(|key| parsed_obj.get(key.to_owned()).is_some())
-                                .map(|key| String::from(parsed_obj.get(key).unwrap())),
-                        )
-                    })
-                    .collect::<Vec<Row>>();
-            }
+    fn try_from(value: Document) -> Result<Self, Self::Error> {
+        Ok(DatabaseValue::Object(value.into_iter().fold(
+            Object::new(),
+            |mut acc, (key, value)| {
+                acc.insert(key, try_from!(<DatabaseValue>(value)).unwrap());
+
+                acc
+            },
+        )))
+    }
+}
+
+impl TryFrom<Bson> for DatabaseValue {
+    type Error = ();
+
+    fn try_from(value: Bson) -> Result<Self, Self::Error> {
+        match value {
+            Bson::String(str) => Ok(DatabaseValue::String(str)),
+            Bson::Array(arr) => Ok(DatabaseValue::Array(
+                arr.into_iter()
+                    .map(|value| DatabaseValue::try_from(value).unwrap())
+                    .collect(),
+            )),
+            Bson::Document(doc) => DatabaseValue::try_from(doc),
+            Bson::Boolean(bool) => Ok(DatabaseValue::Bool(bool)),
+            Bson::Null => Ok(DatabaseValue::Null),
+            Bson::Double(num) => Ok(DatabaseValue::Number(num as i32)),
+            Bson::Int32(num) => Ok(DatabaseValue::Number(num as i32)),
+            Bson::Int64(num) => Ok(DatabaseValue::Number(num as i32)),
+            Bson::Timestamp(timestamp) => Ok(DatabaseValue::DateTime(
+                chrono::Utc.timestamp_opt(timestamp.time as i64, 0).unwrap(),
+            )),
+            Bson::DateTime(date_time) => Ok(DatabaseValue::DateTime(date_time.into())),
+            Bson::ObjectId(object_id) => Ok(DatabaseValue::ObjectId(object_id)),
+            _ => Ok(DatabaseValue::String(value.to_string())),
         }
-
-        TableData { header, rows: body }
     }
 }

@@ -1191,6 +1191,7 @@ dependencies = [
  "rand",
  "ratatui",
  "regex",
+ "rusty_db_cli_derive_internals",
  "rusty_db_cli_mongo",
  "serde",
  "serde_json",
