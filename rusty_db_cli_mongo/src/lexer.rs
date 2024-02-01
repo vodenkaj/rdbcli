@@ -108,6 +108,7 @@ pub struct Lexer {
     start: usize,
     end: usize,
     current: usize,
+    current_in_bytes: usize,
     line: usize,
     errors: Vec<LexerError>,
 }
@@ -120,6 +121,7 @@ impl Lexer {
             tokens: Vec::new(),
             start: 0,
             current: 0,
+            current_in_bytes: 0,
             line: 1,
             errors: Vec::new(),
         }
@@ -337,7 +339,32 @@ impl Lexer {
         if self.is_at_end() {
             return '\0';
         }
-        return self.source.chars().nth(self.current).unwrap();
+
+        let start = self.source.as_bytes().get(self.current_in_bytes).unwrap();
+        let width = self.utf8_char_width(*start);
+        let bytes: Vec<u8> =
+            self.source.as_bytes()[self.current_in_bytes..self.current_in_bytes + width].to_vec();
+
+        let ch = match std::str::from_utf8(&bytes) {
+            Ok(s) => s.chars().next().unwrap(),
+            Err(_) => panic!("Invalid UTF-8"),
+        };
+
+        ch
+    }
+
+    fn utf8_char_width(&self, leading_byte: u8) -> usize {
+        if leading_byte & 0x80 == 0 {
+            1 // ASCII byte
+        } else if leading_byte & 0xE0 == 0xC0 {
+            2 // 110xxxxx
+        } else if leading_byte & 0xF0 == 0xE0 {
+            3 // 1110xxxx
+        } else if leading_byte & 0xF8 == 0xF0 {
+            4 // 11110xxx
+        } else {
+            panic!("Invalid leading byte");
+        }
     }
 
     fn peek_next(&self) -> char {
@@ -348,14 +375,11 @@ impl Lexer {
     }
 
     fn advance(&mut self) -> char {
+        let ch = self.peek();
+        self.current_in_bytes += ch.len_utf8();
         self.current += 1;
-        for (idx, char) in self.source.chars().enumerate() {
-            if idx == self.current - 1 {
-                return char;
-            }
-        }
 
-        panic!("Unexpected end of input");
+        ch
     }
 
     fn is_at_end(&self) -> bool {
