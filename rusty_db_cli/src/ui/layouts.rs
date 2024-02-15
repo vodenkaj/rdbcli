@@ -1,5 +1,6 @@
-use std::{env, sync::Arc};
+use std::sync::Arc;
 
+use clap::Parser;
 use ratatui::layout::Constraint;
 
 use super::{
@@ -16,14 +17,19 @@ use crate::{
     widgets::scrollable_table::ScrollableTableState,
 };
 
+#[derive(clap::Parser)]
+struct CliArgs {
+    /// Value in format like this: mongodb+srv://[username:password@]host[/[defaultauthdb][?options]]
+    #[clap(name = "DATABASE_URI")]
+    database_uri: String,
+}
+
 pub async fn get_table_layout() -> Window {
     let event_manager = EventManager::new();
-    let (_, db_uri) = env::vars()
-        .find(|(key, _)| *key == String::from("DB_URI"))
-        .expect("DB_URI to be present");
+    let CliArgs { database_uri } = CliArgs::parse();
 
-    let connector = if db_uri.contains("mongodb") {
-        MongodbConnectorBuilder::new(&db_uri).build().await
+    let connector = if database_uri.contains("mongodb") {
+        MongodbConnectorBuilder::new(&database_uri).build().await
     } else {
         panic!("Other connectors are not implemented");
     }

@@ -41,7 +41,7 @@ impl MongodbConnectorBuilder {
         Ok(MongodbConnector {
             info,
             client,
-            database: String::from("admin"),
+            database: client_opts.default_database.unwrap_or("admin".to_string()),
         })
     }
 }
