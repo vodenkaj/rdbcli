@@ -8,11 +8,15 @@ use super::{
         base::ComponentCreateInfo,
         command::{CommandComponent, Message},
         scrollable_table::ScrollableTableComponent,
+        status_line::{StatusLineComponent, StatusLineData},
     },
     window::{Window, WindowBuilder},
 };
 use crate::{
-    connectors::{base::TableData, mongodb::connector::MongodbConnectorBuilder},
+    connectors::{
+        base::{Connector, TableData},
+        mongodb::connector::MongodbConnectorBuilder,
+    },
     managers::event_manager::EventManager,
     widgets::scrollable_table::ScrollableTableState,
 };
@@ -34,6 +38,18 @@ pub async fn get_table_layout() -> Window {
         panic!("Other connectors are not implemented");
     }
     .expect("Failed to create DB connector");
+
+    let status_line = StatusLineComponent::new(ComponentCreateInfo {
+        focusable: true,
+        visible: true,
+        constraint: Constraint::Length(1),
+        data: StatusLineData {
+            host: connector.get_info().host.clone(),
+            database_name: connector.database.clone(),
+        },
+        id: 2,
+        event_sender: event_manager.sender.clone(),
+    });
 
     let table = ScrollableTableComponent::new(
         ComponentCreateInfo {
@@ -59,6 +75,7 @@ pub async fn get_table_layout() -> Window {
 
     WindowBuilder::new()
         .with_component(Box::new(table))
+        .with_component(Box::new(status_line))
         .with_component(Box::new(command))
         .build(event_manager)
 }

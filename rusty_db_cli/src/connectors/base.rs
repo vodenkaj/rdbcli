@@ -13,6 +13,7 @@ use crate::widgets::scrollable_table::Row;
 
 pub struct ConnectorInfo {
     pub uri: String,
+    pub host: String,
 }
 
 pub struct TableData<'a> {
