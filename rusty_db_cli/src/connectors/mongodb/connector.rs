@@ -28,15 +28,20 @@ impl MongodbConnectorBuilder {
     pub fn new(uri: &str) -> Self {
         Self {
             info: Some(ConnectorInfo {
-                uri: uri.to_owned(),
+                uri: uri.to_string(),
+                host: "unknown".to_string(),
             }),
         }
     }
 
     pub async fn build(self) -> Result<MongodbConnector> {
-        let info = self.info.unwrap();
+        let mut info = self.info.unwrap();
         let client_opts = ClientOptions::parse(info.uri.clone()).await?;
         let client = Client::with_options(client_opts.clone())?;
+
+        if !client_opts.hosts.is_empty() {
+            info.host = client_opts.hosts[0].to_string();
+        }
 
         Ok(MongodbConnector {
             info,
@@ -49,7 +54,7 @@ impl MongodbConnectorBuilder {
 pub struct MongodbConnector {
     info: ConnectorInfo,
     pub client: Client,
-    database: String,
+    pub database: String,
 }
 
 impl TryFrom<(String, ParametersExpression)> for Command {
