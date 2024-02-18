@@ -288,6 +288,12 @@ impl EventHandler for ScrollableTableComponent {
                             self.spawn_next_data();
                             value.terminal.lock().unwrap().clear()?;
                         }
+                        event::KeyCode::Char('r') => {
+                            self.reset_state();
+                            self.pagination.reset();
+                            self.spawn_next_data();
+                            value.terminal.lock().unwrap().clear()?;
+                        }
                         event::KeyCode::Left | event::KeyCode::Char('h') => {
                             self.handle_next_horizontal_movement(HorizontalDirection::Left)
                         }
