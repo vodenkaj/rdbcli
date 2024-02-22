@@ -1,13 +1,16 @@
+use std::time::Duration;
+
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::TimeZone;
 use mongodb::{
-    bson::{doc, to_bson, Bson, Document},
-    options::{AggregateOptions, ClientOptions, FindOptions},
+    bson::{doc, from_document, to_bson, Bson, Document},
+    options::{AggregateOptions, ClientOptions, DistinctOptions, FindOptions},
     Client, Collection, Cursor, Database,
 };
 use rusty_db_cli_mongo::{
     interpreter::InterpreterError,
+    lexer::Literal,
     parser::{ArrayExpression, ObjectExpression, ParametersExpression},
     to_interpter_error,
 };
@@ -141,6 +144,61 @@ impl TryFrom<(String, ParametersExpression)> for Command {
                     options: AggregateOptions::default(),
                 }))
             }
+            "distinct" => {
+                if params.params.len() > 3 {
+                    return Err(InterpreterError {
+                        message: "Distinct {} only accepts 3 parameters".to_string(),
+                    });
+                } else if params.params.is_empty() {
+                    return Err(InterpreterError {
+                        message: "Distinct {} requires at least one parameter".to_string(),
+                    });
+                }
+
+                let field = String::try_from(params.get_nth_of_type::<Literal>(0)?).unwrap();
+                let filter = params
+                    .get_nth_of_type::<ObjectExpression>(1)
+                    .ok()
+                    .and_then(|obj| to_bson(&obj).ok())
+                    .and_then(|bson| match bson {
+                        Bson::Document(doc) => Some(doc),
+                        _ => None,
+                    });
+
+                let opts_values = params
+                    .get_nth_of_type::<ObjectExpression>(2)
+                    .ok()
+                    .and_then(|obj| to_bson(&obj).ok())
+                    .and_then(|bson| match bson {
+                        Bson::Document(doc) => Some(doc),
+                        _ => None,
+                    });
+                let mut opts = DistinctOptions::default();
+                if let Some(value) = opts_values {
+                    if let Ok(max_time) = value.get_i64("maxTime") {
+                        opts.max_time = Some(Duration::from_millis(max_time as u64));
+                    }
+                    if let Ok(collation) = value.get_document("collation") {
+                        let result = to_interpter_error!(from_document(collation.clone()))?;
+                        opts.collation = Some(result)
+                    }
+                    if let Ok(selection_criteria) = value.get_document("selectionCriteria") {
+                        let result =
+                            to_interpter_error!(from_document(selection_criteria.clone()))?;
+                        opts.selection_criteria = Some(result)
+                    }
+                    if let Ok(read_concern) = value.get_document("readConcern") {
+                        let result = to_interpter_error!(from_document(read_concern.clone()))?;
+                        opts.read_concern = Some(result)
+                    }
+                }
+
+                Ok(Command::Distinct(DistinctQuery {
+                    field,
+                    filter,
+                    options: opts,
+                }))
+            }
             _ => Err(InterpreterError {
                 message: (format!("Command {} not implemented", command)),
             }),
@@ -167,11 +225,18 @@ pub struct CountQuery {
     options: AggregateOptions,
 }
 
-// TODO: Distinct
+#[derive(Default)]
+pub struct DistinctQuery {
+    field: String,
+    filter: Option<Document>,
+    options: DistinctOptions,
+}
+
 pub enum Command {
     Find(FindQuery),
     Count(CountQuery),
     Aggregate(AggregateQuery),
+    Distinct(DistinctQuery),
 }
 
 // TODO: Update queries
@@ -183,6 +248,7 @@ impl QueryBuilder for Command {
             Command::Find(find) => find.add_sub_query(query),
             Command::Count(count) => count.add_sub_query(query),
             Command::Aggregate(aggregate) => aggregate.add_sub_query(query),
+            _ => self.add_sub_query(query),
         }
     }
 
@@ -190,11 +256,12 @@ impl QueryBuilder for Command {
         self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
-    ) -> Result<Cursor<Document>, mongodb::error::Error> {
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
         match self {
             Command::Find(find) => find.build(collection, pagination).await,
             Command::Count(count) => count.build(collection, pagination).await,
             Command::Aggregate(aggregate) => aggregate.build(collection, pagination).await,
+            Command::Distinct(distinct) => distinct.build(collection, pagination).await,
         }
     }
 }
@@ -223,8 +290,8 @@ impl QueryBuilder for FindQuery {
         mut self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
-    ) -> Result<Cursor<Document>, mongodb::error::Error> {
-        if self.count {
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
+        Ok(if self.count {
             let mut pipelines = Vec::new();
             if self.filter.is_some() {
                 pipelines.push(doc! { "$match": self.filter.unwrap()});
@@ -234,12 +301,27 @@ impl QueryBuilder for FindQuery {
             let mut aggregate_options = AggregateOptions::default();
             aggregate_options.allow_disk_use = self.options.allow_disk_use;
 
-            collection.aggregate(pipelines, aggregate_options).await
+            DatabaseResponse::Cursor(collection.aggregate(pipelines, aggregate_options).await?)
         } else {
             self.options.skip = Some(pagination.start);
             self.options.limit = Some(pagination.limit as i64);
-            collection.find(self.filter, self.options).await
-        }
+            DatabaseResponse::Cursor(collection.find(self.filter, self.options).await?)
+        })
+    }
+}
+
+#[async_trait]
+impl QueryBuilder for DistinctQuery {
+    async fn build(
+        self,
+        collection: Collection<Document>,
+        _: PaginationInfo,
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
+        Ok(DatabaseResponse::Bson(
+            collection
+                .distinct(self.field, self.filter, self.options)
+                .await?,
+        ))
     }
 }
 
@@ -261,7 +343,7 @@ impl QueryBuilder for CountQuery {
         self,
         collection: Collection<Document>,
         _: PaginationInfo,
-    ) -> Result<Cursor<Document>, mongodb::error::Error> {
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
         let mut pipelines = vec![doc! {"$count": "count"}];
         if self.filter.is_some() {
             pipelines.push(self.filter.unwrap());
@@ -270,7 +352,9 @@ impl QueryBuilder for CountQuery {
         let mut aggregate_options = AggregateOptions::default();
         aggregate_options.allow_disk_use = self.options.allow_disk_use;
 
-        collection.aggregate(pipelines, aggregate_options).await
+        Ok(DatabaseResponse::Cursor(
+            collection.aggregate(pipelines, aggregate_options).await?,
+        ))
     }
 }
 
@@ -293,26 +377,37 @@ impl QueryBuilder for AggregateQuery {
         mut self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
-    ) -> Result<Cursor<Document>, mongodb::error::Error> {
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
         let mut aggregate_options = AggregateOptions::default();
         aggregate_options.allow_disk_use = self.options.allow_disk_use;
         self.pipelines.push(doc! {"$skip": pagination.start as u32});
         self.pipelines.push(doc! {"$limit": pagination.limit});
 
-        collection
-            .aggregate(self.pipelines, aggregate_options)
-            .await
+        Ok(DatabaseResponse::Cursor(
+            collection
+                .aggregate(self.pipelines, aggregate_options)
+                .await?,
+        ))
     }
+}
+
+pub enum DatabaseResponse {
+    Cursor(Cursor<Document>),
+    Bson(Vec<Bson>),
 }
 
 #[async_trait]
 pub trait QueryBuilder {
-    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError>;
+    fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
+        Err(InterpreterError {
+            message: format!("QueryBuilder does not support {:?}", query),
+        })
+    }
     async fn build(
         self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
-    ) -> Result<Cursor<Document>, mongodb::error::Error>;
+    ) -> Result<DatabaseResponse, mongodb::error::Error>;
 }
 
 // TODO: Limit, Skip

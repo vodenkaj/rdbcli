@@ -31,15 +31,21 @@ impl<'a> Default for TableData<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DatabaseData(pub Vec<DatabaseValue>);
+pub struct DatabaseData(pub Vec<Object>);
 
 impl IntoIterator for DatabaseData {
-    type Item = DatabaseValue;
+    type Item = Object;
 
     type IntoIter = IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl From<DatabaseData> for serde_json::Value {
+    fn from(val: DatabaseData) -> Self {
+        serde_json::Value::Array(val.into_iter().map(Into::into).collect())
     }
 }
 
@@ -56,7 +62,19 @@ pub enum DatabaseValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Object(HashMap<String, DatabaseValue>);
+pub struct Object(pub HashMap<String, DatabaseValue>);
+
+impl From<Object> for serde_json::Value {
+    fn from(val: Object) -> Self {
+        serde_json::Value::Object(val.0.into_iter().fold(
+            serde_json::Map::new(),
+            |mut acc, (key, value)| {
+                acc.insert(key, value.into());
+                acc
+            },
+        ))
+    }
+}
 
 impl IntoIterator for Object {
     type Item = (String, DatabaseValue);
@@ -88,7 +106,7 @@ impl Object {
 }
 
 impl Deref for DatabaseData {
-    type Target = Vec<DatabaseValue>;
+    type Target = Vec<Object>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -123,9 +141,9 @@ pub trait Connector: Send + Sync {
     fn set_database(&mut self, database: &str);
 }
 
-impl Into<serde_json::Value> for DatabaseValue {
-    fn into(self) -> serde_json::Value {
-        match self {
+impl From<DatabaseValue> for serde_json::Value {
+    fn from(val: DatabaseValue) -> Self {
+        match val {
             DatabaseValue::String(str) => serde_json::Value::String(str),
             DatabaseValue::DateTime(date_time) => serde_json::Value::String(date_time.to_rfc3339()),
             DatabaseValue::Number(number) => serde_json::Value::Number(number.into()),
@@ -133,13 +151,7 @@ impl Into<serde_json::Value> for DatabaseValue {
             DatabaseValue::Array(arr) => {
                 serde_json::Value::Array(arr.into_iter().map(Into::into).collect())
             }
-            DatabaseValue::Object(obj) => serde_json::Value::Object(obj.into_iter().fold(
-                serde_json::Map::new(),
-                |mut acc, (key, value)| {
-                    acc.insert(key, value.into());
-                    acc
-                },
-            )),
+            DatabaseValue::Object(obj) => obj.into(),
             DatabaseValue::Bool(bool) => serde_json::Value::Bool(bool),
             DatabaseValue::Null => serde_json::Value::Null,
         }

@@ -12,9 +12,7 @@ use super::{
     command::{Message, Severity},
 };
 use crate::{
-    connectors::base::{
-        Connector, DatabaseData, DatabaseValue, Object, PaginationInfo, TableData, LIMIT,
-    },
+    connectors::base::{Connector, DatabaseData, Object, PaginationInfo, TableData, LIMIT},
     log_error,
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
     try_from,
@@ -342,15 +340,13 @@ impl<'a> From<DatabaseData> for TableData<'a> {
             let mut unique_keys = value
                 .iter()
                 .fold(HashSet::new(), |mut acc, value| {
-                    if let DatabaseValue::Object(obj) = value {
-                        acc.extend(obj.keys().cloned());
-                    }
+                    acc.extend(value.keys().cloned());
 
                     acc
                 })
                 .into_iter()
                 .collect::<Vec<String>>();
-            unique_keys.sort_by(|a, b| a.len().cmp(&b.len()));
+            unique_keys.sort_by_key(|a| a.len());
 
             body = value
                 .into_iter()
