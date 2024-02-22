@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use mongodb::bson::Document;
 use rusty_db_cli_mongo::{
     interpreter::{Interpreter, InterpreterError},
@@ -10,7 +12,7 @@ use tokio_stream::StreamExt;
 
 use super::connector::{MongodbConnector, SubCommand};
 use crate::connectors::{
-    base::{DatabaseData, DatabaseValue, PaginationInfo},
+    base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
     mongodb::connector::{Command, QueryBuilder},
 };
 
@@ -91,16 +93,44 @@ impl<'a> InterpreterMongo<'a> {
 
             let collection: mongodb::Collection<Document> = db.collection(&collection_name);
 
-            let mut cursor = main_command
+            let database_response = main_command
                 .build(collection, self.pagination)
                 .await
                 .unwrap();
-            let mut result: DatabaseData = DatabaseData(Vec::new());
 
-            while let Some(doc) = cursor.try_next().await.unwrap() {
-                result.push(try_from!(<DatabaseValue>(doc))?);
-                if result.len() >= MAXIMUM_DOCUMENTS {
-                    break;
+            let mut result: DatabaseData = DatabaseData(Vec::new());
+            match database_response {
+                super::connector::DatabaseResponse::Cursor(mut cursor) => {
+                    while let Some(doc) = cursor.try_next().await.unwrap() {
+                        let converted_doc = try_from!(<DatabaseValue>(doc))?;
+                        match converted_doc {
+                            DatabaseValue::Object(obj) => {
+                                result.push(obj);
+                            }
+                            _ => {
+                                return Err(InterpreterError {
+                                    message: "Database returned unexpected value".to_string(),
+                                })
+                            }
+                        }
+                        if result.len() >= MAXIMUM_DOCUMENTS {
+                            break;
+                        }
+                    }
+                }
+                super::connector::DatabaseResponse::Bson(bson_arr) => {
+                    for bson in bson_arr {
+                        let converted_bson = try_from!(<DatabaseValue>(bson))?;
+                        match converted_bson {
+                            DatabaseValue::Object(obj) => {
+                                result.push(obj);
+                            }
+                            _ => result.push(Object(HashMap::from([(
+                                "result".to_string(),
+                                converted_bson,
+                            )]))),
+                        }
+                    }
                 }
             }
 
