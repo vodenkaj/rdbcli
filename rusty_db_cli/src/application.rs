@@ -113,9 +113,9 @@ macro_rules! log_error {
     ($event_sender:expr, $err:expr) => {
         if let Some(err) = $err {
             $event_sender
-                .send(Event::OnMessage(Message {
+                .send(Event::OnMessage($crate::ui::components::command::Message {
                     value: err.to_string(),
-                    severity: Severity::Error,
+                    severity: $crate::ui::components::command::Severity::Error,
                 }))
                 .unwrap();
         }

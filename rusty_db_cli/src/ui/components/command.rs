@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::{style::Style, widgets::Paragraph};
@@ -57,7 +59,8 @@ impl Component for CommandComponent {
     }
 }
 
-const COMMAND_REGEX: &str = r#"(.*) (.*)"#;
+// Not bug proof
+const COMMAND_REGEX: &str = r#"^([^ ]*) ((!\((.*)\))|(.*))"#;
 
 impl EventHandler for CommandComponent {
     fn on_event(&mut self, event: &Event) -> Result<()> {
@@ -84,13 +87,31 @@ impl EventHandler for CommandComponent {
                                         .get(1)
                                         .with_context(|| "First argument of command is missing")?
                                         .as_str();
+
                                     let arg0 = m
-                                        .get(2)
-                                        .with_context(|| "Second argument of command is missing")?
-                                        .as_str();
+                                        .get(5)
+                                        .map(|r| r.as_str().to_string())
+                                        .or_else(|| {
+                                            let command = m.get(4)?;
+                                            let arg = Command::new("sh")
+                                                .arg("-c")
+                                                .arg(command.as_str())
+                                                .output()
+                                                .ok()?;
+
+                                            Some(
+                                                std::str::from_utf8(&arg.stdout)
+                                                    .ok()?
+                                                    .trim()
+                                                    .to_string(),
+                                            )
+                                        })
+                                        .with_context(|| "Argument of command is missing")?;
+
                                     anyhow::Ok((command, arg0))
                                 })
                                 .with_context(|| "Invalid command")??;
+
                             match command {
                                 "use" => {
                                     self.info.event_sender.send(Event::OnConnection(

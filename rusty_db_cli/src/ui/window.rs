@@ -15,6 +15,7 @@ use ratatui::{
 use super::components::base::{Component, ComponentDrawInfo};
 use crate::{
     application::Mode,
+    log_error,
     managers::event_manager::{Event, EventHandler, EventManager},
 };
 
@@ -123,7 +124,9 @@ impl Window {
 
     pub fn on_key(&mut self, event: Event) {
         self.event_manager.sender.send(event).unwrap();
-        self.event_manager.pool(&mut self.components).unwrap();
+        if let Some(err) = self.event_manager.pool(&mut self.components).err() {
+            log_error!(self.event_manager.sender, Some(err))
+        }
     }
 }
 
