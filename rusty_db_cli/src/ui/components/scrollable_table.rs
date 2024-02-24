@@ -270,6 +270,46 @@ impl EventHandler for ScrollableTableComponent {
                         })));
                     log_error!(self.info.event_sender, result.err());
                 }
+                ConnectionEvent::Connect(value) => {
+                    let connector = self.connector.clone();
+                    let cloned_value = value.clone();
+                    let cloned_sender = self.info.event_sender.clone();
+                    let result = self
+                        .info
+                        .event_sender
+                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                            match connector
+                                .lock()
+                                .await
+                                .set_connection(cloned_value.clone())
+                                .await
+                            {
+                                Ok(info) => {
+                                    cloned_sender
+                                        .send(Event::OnMessage(Message {
+                                            value: format!(
+                                                "Connection switched to '{}'",
+                                                &info.host.clone()
+                                            ),
+                                            severity: Severity::Info,
+                                        }))
+                                        .unwrap();
+                                    cloned_sender
+                                        .send(Event::OnConnection(
+                                            ConnectionEvent::SwitchConnection(
+                                                info.host.clone(),
+                                                info.database.clone(),
+                                            ),
+                                        ))
+                                        .unwrap()
+                                }
+                                Err(e) => {
+                                    log_error!(cloned_sender, e.source());
+                                }
+                            };
+                        })));
+                    log_error!(self.info.event_sender, result.err());
+                }
                 _ => (),
             },
             Event::OnInput(value) => {

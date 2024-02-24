@@ -36,6 +36,9 @@ impl EventHandler for StatusLineComponent {
     fn on_event(&mut self, event: &Event) -> anyhow::Result<()> {
         if let Event::OnConnection(ConnectionEvent::SwitchDatabase(value)) = event {
             self.info.data.database_name = value.clone();
+        } else if let Event::OnConnection(ConnectionEvent::SwitchConnection(host, db)) = event {
+            self.info.data.host = host.clone();
+            self.info.data.database_name = db.clone();
         }
         Ok(())
     }

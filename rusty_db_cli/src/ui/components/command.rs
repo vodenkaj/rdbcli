@@ -92,10 +92,16 @@ impl EventHandler for CommandComponent {
                                 })
                                 .with_context(|| "Invalid command")??;
                             match command {
-                                "c" | "connect" | "use" => {
+                                "use" => {
                                     self.info.event_sender.send(Event::OnConnection(
                                         ConnectionEvent::SwitchDatabase(arg0.to_string()),
-                                    ));
+                                    ))?;
+                                    self.info.data.value = String::new();
+                                }
+                                "connect" => {
+                                    self.info.event_sender.send(Event::OnConnection(
+                                        ConnectionEvent::Connect(arg0.to_string()),
+                                    ))?;
                                     self.info.data.value = String::new();
                                 }
                                 _ => {

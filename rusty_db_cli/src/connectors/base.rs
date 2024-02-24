@@ -11,9 +11,11 @@ use rusty_db_cli_derive_internals::TryFrom;
 
 use crate::widgets::scrollable_table::Row;
 
+#[derive(Debug, Clone)]
 pub struct ConnectorInfo {
     pub uri: String,
     pub host: String,
+    pub database: String,
 }
 
 pub struct TableData<'a> {
@@ -139,6 +141,7 @@ pub trait Connector: Send + Sync {
     fn get_info(&self) -> &ConnectorInfo;
     async fn get_data(&self, query: String, pagination: PaginationInfo) -> Result<DatabaseData>;
     fn set_database(&mut self, database: &str);
+    async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo>;
 }
 
 impl From<DatabaseValue> for serde_json::Value {
