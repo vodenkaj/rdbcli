@@ -33,6 +33,7 @@ impl MongodbConnectorBuilder {
             info: Some(ConnectorInfo {
                 uri: uri.to_string(),
                 host: "unknown".to_string(),
+                database: "unknown".to_string(),
             }),
         }
     }
@@ -45,11 +46,13 @@ impl MongodbConnectorBuilder {
         if !client_opts.hosts.is_empty() {
             info.host = client_opts.hosts[0].to_string();
         }
+        let database = client_opts.default_database.unwrap_or("admin".to_string());
+        info.database = database.clone();
 
         Ok(MongodbConnector {
             info,
             client,
-            database: client_opts.default_database.unwrap_or("admin".to_string()),
+            database,
         })
     }
 }
@@ -488,6 +491,29 @@ impl Connector for MongodbConnector {
             Ok(result) => Ok(result),
             Err(err) => Err(anyhow!(err.message)),
         }
+    }
+
+    async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
+        let client_opts = ClientOptions::parse(uri.clone()).await?;
+        let client = Client::with_options(client_opts.clone())?;
+
+        let info = ConnectorInfo {
+            host: client_opts
+                .hosts
+                .first()
+                .map(|host| host.to_string())
+                .unwrap_or("unknown".to_string()),
+            uri,
+            database: client_opts.default_database.unwrap_or("admin".to_string()),
+        };
+
+        //self.client.shutdown().await; -- may be needed?
+
+        self.database = info.database.clone();
+        self.info = info;
+        self.client = client;
+
+        Ok(self.info.clone())
     }
 }
 

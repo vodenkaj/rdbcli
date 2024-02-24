@@ -21,7 +21,8 @@ use crate::{
 
 pub enum ConnectionEvent {
     Add(ConnectionInfo),
-    Connect(ConnectionInfo),
+    Connect(String),
+    SwitchConnection(String, String),
     SwitchDatabase(String),
 }
 
