@@ -274,8 +274,7 @@ impl EventHandler for ScrollableTableComponent {
                     let connector = self.connector.clone();
                     let cloned_value = value.clone();
                     let cloned_sender = self.info.event_sender.clone();
-                    let result = self
-                        .info
+                    self.info
                         .event_sender
                         .send(Event::OnAsyncEvent(tokio::spawn(async move {
                             match connector
@@ -304,11 +303,10 @@ impl EventHandler for ScrollableTableComponent {
                                         .unwrap()
                                 }
                                 Err(e) => {
-                                    log_error!(cloned_sender, e.source());
+                                    log_error!(cloned_sender, Some(e));
                                 }
                             };
                         })));
-                    log_error!(self.info.event_sender, result.err());
                 }
                 _ => (),
             },

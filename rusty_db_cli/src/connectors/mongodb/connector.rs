@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::TimeZone;
 use mongodb::{
@@ -494,8 +494,14 @@ impl Connector for MongodbConnector {
     }
 
     async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
-        let client_opts = ClientOptions::parse(uri.clone()).await?;
+        let mut client_opts = ClientOptions::parse(uri.clone()).await?;
+        client_opts.server_selection_timeout = Some(Duration::from_secs(5));
         let client = Client::with_options(client_opts.clone())?;
+        client
+            .database("admin")
+            .run_command(doc! {"ping": 1}, None)
+            .await
+            .with_context(|| "Failed to connect to the database")?;
 
         let info = ConnectorInfo {
             host: client_opts
