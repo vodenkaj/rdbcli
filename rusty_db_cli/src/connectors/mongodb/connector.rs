@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fs::File, io::Write, os::unix::fs::FileExt, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -21,6 +21,7 @@ use crate::{
         Connector, ConnectorInfo, DatabaseData, DatabaseValue, Object, PaginationInfo,
     },
     try_from,
+    utils::external_editor::MONGO_COLLECTIONS_FILE,
 };
 
 pub struct MongodbConnectorBuilder {
@@ -48,6 +49,17 @@ impl MongodbConnectorBuilder {
         }
         let database = client_opts.default_database.unwrap_or("admin".to_string());
         info.database = database.clone();
+
+        let collections = client
+            .database(&database)
+            .list_collection_names(None)
+            .await?
+            .iter()
+            .fold(String::new(), |acc, name| acc + name + "\n");
+
+        let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
+        file.write_all_at(collections.as_bytes(), 0)?;
+        file.flush()?;
 
         Ok(MongodbConnector {
             info,
@@ -475,8 +487,23 @@ impl MongodbConnector {
 
 #[async_trait]
 impl Connector for MongodbConnector {
-    fn set_database(&mut self, database: &str) {
+    async fn set_database(&mut self, database: &str) -> Result<()> {
         self.database = String::from(database);
+
+        let collections = self
+            .client
+            .database(database)
+            .list_collection_names(None)
+            .await
+            .unwrap()
+            .iter()
+            .fold(String::new(), |acc, name| acc + name + "\n");
+
+        let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string())?;
+        file.write_all_at(collections.as_bytes(), 0)?;
+        file.flush()?;
+
+        Ok(())
     }
 
     fn get_info(&self) -> &crate::connectors::base::ConnectorInfo {
@@ -512,6 +539,17 @@ impl Connector for MongodbConnector {
             uri,
             database: client_opts.default_database.unwrap_or("admin".to_string()),
         };
+
+        let collections = client
+            .database(&info.database)
+            .list_collection_names(None)
+            .await?
+            .iter()
+            .fold(String::new(), |acc, name| acc + name + "\n");
+
+        let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
+        file.write_all_at(collections.as_bytes(), 0)?;
+        file.flush()?;
 
         //self.client.shutdown().await; -- may be needed?
 

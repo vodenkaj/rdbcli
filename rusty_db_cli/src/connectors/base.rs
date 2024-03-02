@@ -140,7 +140,7 @@ pub const LIMIT: u32 = 100;
 pub trait Connector: Send + Sync {
     fn get_info(&self) -> &ConnectorInfo;
     async fn get_data(&self, query: String, pagination: PaginationInfo) -> Result<DatabaseData>;
-    fn set_database(&mut self, database: &str);
+    async fn set_database(&mut self, database: &str) -> Result<()>;
     async fn set_connection(&mut self, uri: String) -> anyhow::Result<ConnectorInfo>;
 }
 

@@ -260,13 +260,27 @@ impl EventHandler for ScrollableTableComponent {
                         .info
                         .event_sender
                         .send(Event::OnAsyncEvent(tokio::spawn(async move {
-                            connector.lock().await.set_database(&cloned_value);
-                            cloned_sender
-                                .send(Event::OnMessage(Message {
-                                    value: format!("Database switched to '{}'", &cloned_value),
-                                    severity: Severity::Info,
-                                }))
-                                .unwrap();
+                            match connector.lock().await.set_database(&cloned_value).await {
+                                Ok(_) => {
+                                    cloned_sender
+                                        .send(Event::OnMessage(Message {
+                                            value: format!(
+                                                "Database switched to '{}'",
+                                                &cloned_value
+                                            ),
+                                            severity: Severity::Info,
+                                        }))
+                                        .unwrap();
+                                }
+                                Err(e) => {
+                                    cloned_sender
+                                        .send(Event::OnMessage(Message {
+                                            value: e.to_string(),
+                                            severity: Severity::Error,
+                                        }))
+                                        .unwrap();
+                                }
+                            }
                         })));
                     log_error!(self.info.event_sender, result.err());
                 }
