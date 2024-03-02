@@ -4,7 +4,7 @@ use crate::{
 };
 
 pub struct Interpreter {
-    tokens: Vec<Token>,
+    pub tokens: Vec<Token>,
 }
 
 #[derive(Debug)]

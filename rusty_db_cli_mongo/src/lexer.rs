@@ -92,8 +92,8 @@ pub struct Token {
     pub r#type: TokenType,
     lexeme: String,
     pub literal: Option<Literal>,
-    line: usize,
-    position: usize,
+    pub line: usize,
+    pub position: usize,
 }
 
 impl ToString for Token {
