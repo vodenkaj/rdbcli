@@ -1,4 +1,10 @@
-use std::process::Command;
+use std::{
+    collections::HashSet,
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    process::Command,
+    thread,
+};
 
 use anyhow::{Context, Result};
 use crossterm::event;
@@ -6,7 +12,10 @@ use ratatui::{style::Style, widgets::Paragraph};
 use regex::Regex;
 
 use super::base::{Component, ComponentCreateInfo};
-use crate::managers::event_manager::{ConnectionEvent, Event, EventHandler};
+use crate::{
+    managers::event_manager::{ConnectionEvent, Event, EventHandler},
+    utils::external_editor::HISTORY_FILE,
+};
 
 #[derive(Default, Clone)]
 pub enum Severity {
@@ -24,11 +33,32 @@ pub struct Message {
 
 pub struct CommandComponent {
     info: ComponentCreateInfo<Message>,
+    history: Vec<String>,
+    history_index: usize,
 }
 
 impl CommandComponent {
     pub fn new(info: ComponentCreateInfo<Message>) -> Self {
-        Self { info }
+        let mut handle = File::open(HISTORY_FILE.to_string()).unwrap();
+        let mut buffer = String::new();
+
+        handle.read_to_string(&mut buffer).unwrap();
+
+        Self {
+            info,
+            history: buffer
+                .split('\n')
+                .collect::<HashSet<&str>>()
+                .into_iter()
+                .filter_map(|s| {
+                    if s.is_empty() {
+                        return None;
+                    }
+                    return Some(s.to_string());
+                })
+                .collect(),
+            history_index: 0,
+        }
     }
 }
 
@@ -79,6 +109,21 @@ impl EventHandler for CommandComponent {
                         event::KeyCode::Backspace => {
                             self.info.data.value.pop();
                         }
+                        event::KeyCode::Up => {
+                            if let Some(history) = self.history.get(self.history_index) {
+                                self.info.data.value.clone_from(history);
+                                self.history_index += 1;
+                            }
+                        }
+                        event::KeyCode::Down => {
+                            if self.history_index != 0 {
+                                self.history_index -= 1;
+
+                                if let Some(history) = self.history.get(self.history_index) {
+                                    self.info.data.value.clone_from(history);
+                                }
+                            }
+                        }
                         event::KeyCode::Enter => {
                             let (command, arg0) = Regex::new(COMMAND_REGEX)?
                                 .captures(&self.info.data.value)
@@ -111,6 +156,17 @@ impl EventHandler for CommandComponent {
                                     anyhow::Ok((command, arg0))
                                 })
                                 .with_context(|| "Invalid command")??;
+
+                            let issued_command = self.info.data.value.clone();
+                            thread::spawn(move || {
+                                let mut handle = OpenOptions::new()
+                                    .append(true)
+                                    .open(HISTORY_FILE.to_string())
+                                    .unwrap();
+                                handle
+                                    .write_all(format!("{}\n", issued_command).as_bytes())
+                                    .unwrap();
+                            });
 
                             match command {
                                 "use" => {
