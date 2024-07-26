@@ -97,6 +97,16 @@ pub const MONGO_COLLECTIONS_FILE: Lazy<String> = Lazy::new(|| {
     path.to_str().unwrap().to_string()
 });
 
+pub const HISTORY_FILE: Lazy<String> = Lazy::new(|| {
+    let path = Path::new(CONFIG_PATH.as_str()).join(".command_history.txt");
+
+    if !path.exists() {
+        File::create(path.clone()).expect("Failed to create command history file");
+    }
+
+    path.to_str().unwrap().to_string()
+});
+
 const CONFIG_DIR_NAME: &str = "rusty_db_cli";
 
 pub const CONFIG_PATH: Lazy<String> = Lazy::new(|| {
