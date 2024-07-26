@@ -1,9 +1,10 @@
 use std::{
     env,
-    fs::{create_dir, File},
-    io::Read,
+    fmt::Debug,
+    fs::{create_dir, File, OpenOptions},
+    io::{Read, Write},
     os::unix::prelude::FileExt,
-    path::Path,
+    path::{self, Path, PathBuf},
     process::Command,
 };
 
@@ -111,4 +112,41 @@ pub const CONFIG_PATH: Lazy<String> = Lazy::new(|| {
     }
 
     return xdg_dir_config.to_str().unwrap().to_string();
+});
+
+pub struct DebugFile {
+    location: PathBuf,
+}
+
+impl DebugFile {
+    pub fn new(location: PathBuf) -> Self {
+        if !location.exists() {
+            File::create(location.clone()).unwrap();
+        }
+
+        Self { location }
+    }
+
+    pub fn write_log(&self, data: &impl Debug) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(self.location.clone())
+            .unwrap();
+        file.write_all(
+            format!(
+                "\n[{}]: {:?}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                data
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    }
+}
+
+pub static DEBUG_FILE: Lazy<DebugFile> = Lazy::new(|| {
+    let config_path = CONFIG_PATH.clone().to_string();
+    let debug_file_path = path::Path::new(&config_path).join("debug.log");
+    DebugFile::new(debug_file_path)
 });

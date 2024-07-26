@@ -10,9 +10,11 @@ use mongodb::{
 };
 use rusty_db_cli_mongo::{
     interpreter::InterpreterError,
-    lexer::Literal,
-    parser::{ArrayExpression, ObjectExpression, ParametersExpression},
     to_interpter_error,
+    types::{
+        expressions::{ArrayExpression, ObjectExpression, ParametersExpression},
+        literals::{Literal, Number},
+    },
 };
 
 use super::interpreter::InterpreterMongo;
@@ -21,7 +23,7 @@ use crate::{
         Connector, ConnectorInfo, DatabaseData, DatabaseValue, Object, PaginationInfo,
     },
     try_from,
-    utils::external_editor::MONGO_COLLECTIONS_FILE,
+    utils::external_editor::{DEBUG_FILE, MONGO_COLLECTIONS_FILE},
 };
 
 pub struct MongodbConnectorBuilder {
@@ -89,6 +91,8 @@ impl TryFrom<(String, ParametersExpression)> for Command {
 
                 let filter = params.get_nth_of_type::<ObjectExpression>(0).ok();
                 let projection = params.get_nth_of_type::<ObjectExpression>(1).ok();
+
+                DEBUG_FILE.write_log(&filter);
 
                 let mut opts = FindOptions::default();
                 if let Bson::Document(doc) = to_interpter_error!(to_bson(&projection))? {
@@ -590,9 +594,9 @@ impl TryFrom<Bson> for DatabaseValue {
             Bson::Document(doc) => DatabaseValue::try_from(doc),
             Bson::Boolean(bool) => Ok(DatabaseValue::Bool(bool)),
             Bson::Null => Ok(DatabaseValue::Null),
-            Bson::Double(num) => Ok(DatabaseValue::Number(num as i32)),
-            Bson::Int32(num) => Ok(DatabaseValue::Number(num as i32)),
-            Bson::Int64(num) => Ok(DatabaseValue::Number(num as i32)),
+            Bson::Double(num) => Ok(DatabaseValue::Number(Number::F64(num))),
+            Bson::Int32(num) => Ok(DatabaseValue::Number(Number::I32(num))),
+            Bson::Int64(num) => Ok(DatabaseValue::Number(Number::I64(num))),
             Bson::Timestamp(timestamp) => Ok(DatabaseValue::DateTime(
                 chrono::Utc.timestamp_opt(timestamp.time as i64, 0).unwrap(),
             )),

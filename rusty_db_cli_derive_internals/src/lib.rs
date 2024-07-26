@@ -41,3 +41,36 @@ pub fn try_from_variant(args: TokenStream) -> TokenStream {
 
     TokenStream::from(try_from_fc)
 }
+
+#[proc_macro_derive(WithType)]
+pub fn typed_for_enum(args: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(args as DeriveInput);
+
+    let mut try_from_fc = TokenStream2::new();
+    let enum_name = &input.ident;
+
+    if let syn::Data::Enum(data_enum) = &input.data {
+        let info = data_enum.variants.iter().map(|variant| {
+            let variant_name = &variant.ident;
+            quote! {
+                #enum_name::#variant_name(val) => val.get_type_info(),
+            }
+        });
+
+        try_from_fc.extend(quote! {
+            impl Typed for #enum_name {
+                fn get_type_info(&self) -> TypeInfo {
+                    match self {
+                        #(#info)*
+                    }
+                }
+            }
+        });
+    } else {
+        return syn::Error::new_spanned(input, "Expected an enum")
+            .to_compile_error()
+            .into();
+    }
+
+    TokenStream::from(try_from_fc)
+}

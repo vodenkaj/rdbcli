@@ -1,8 +1,10 @@
 use core::fmt;
-use std::fmt::Debug;
+use std::{fmt::Debug, str::FromStr};
 
-use rusty_db_cli_derive_internals::TryFrom;
-use serde::{ser::Serializer, Serialize};
+use crate::types::{
+    errors::UnexpectedTokenError,
+    literals::{Literal, Null, Number},
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenType {
@@ -39,52 +41,10 @@ impl fmt::Display for TokenType {
 
 #[derive(Debug)]
 pub struct LexerError {
-    message: String,
-    position: usize,
-    line: usize,
-}
-
-#[derive(Debug, Clone, TryFrom)]
-pub enum Literal {
-    String(String),
-    Number(f32),
-    Bool(bool),
-    Null(Null),
-}
-
-impl Serialize for Literal {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Literal::String(str) => str.serialize(serializer),
-            Literal::Number(num) => num.serialize(serializer),
-            Literal::Bool(bool) => bool.serialize(serializer),
-            Literal::Null(null) => null.serialize(serializer),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Null {}
-
-impl Serialize for Null {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_none()
-    }
-}
-
-impl ToString for Literal {
-    fn to_string(&self) -> String {
-        match self {
-            Literal::String(str) => str.clone(),
-            _ => self.to_string(),
-        }
-    }
+    pub message: String,
+    pub position: usize,
+    pub line: usize,
+    pub token_error: UnexpectedTokenError,
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +53,19 @@ pub struct Token {
     lexeme: String,
     pub literal: Option<Literal>,
     pub line: usize,
-    pub position: usize,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone)]
+pub struct Range {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Range {
+    pub fn is_value_within(&self, value: usize) -> bool {
+        self.start <= value && self.end >= value
+    }
 }
 
 impl ToString for Token {
@@ -104,39 +76,49 @@ impl ToString for Token {
 
 pub struct Lexer {
     source: String,
+    source_bytes: Vec<u8>,
     tokens: Vec<Token>,
     start: usize,
+    start_relative: usize,
     end: usize,
     current: usize,
+    current_relative: usize,
     current_in_bytes: usize,
     line: usize,
+    current_string: String,
     errors: Vec<LexerError>,
 }
 
 impl Lexer {
     pub fn new(source: String) -> Self {
         Self {
+            current_string: String::new(),
             end: source.chars().count(),
+            source_bytes: source.bytes().collect(),
             source,
             tokens: Vec::new(),
             start: 0,
+            start_relative: 0,
             current: 0,
+            current_relative: 0,
             current_in_bytes: 0,
-            line: 1,
+            line: 0,
             errors: Vec::new(),
         }
     }
 
-    pub fn scan_tokens(mut self) -> Result<Vec<Token>, Vec<LexerError>> {
+    pub fn scan_tokens(mut self) -> Result<Vec<Token>, (Vec<Token>, Vec<LexerError>)> {
         while !self.is_at_end() {
             self.start = self.current;
+            self.start_relative = self.current_relative;
+            self.current_string = String::new();
             self.scan_token();
         }
 
         if self.errors.is_empty() {
             return Ok(self.tokens);
         }
-        Err(self.errors)
+        Err((self.tokens, self.errors))
     }
 
     fn scan_token(&mut self) {
@@ -152,115 +134,142 @@ impl Lexer {
         }
 
         match c {
-            ';' => self.add_token(TokenType::Semicolon, None),
-            '(' => self.add_token(TokenType::LeftParen, None),
-            ')' => self.add_token(TokenType::RightParen, None),
-            '{' => self.add_token(TokenType::LeftBrace, None),
-            '}' => self.add_token(TokenType::RightBrace, None),
-            '[' => self.add_token(TokenType::LeftBracket, None),
-            ']' => self.add_token(TokenType::RightBracket, None),
-            '.' => self.add_token(TokenType::Dot, None),
-            ',' => self.add_token(TokenType::Comma, None),
-            ':' => self.add_token(TokenType::Colon, None),
-            '"' => {
-                self.string();
-                // We are using serde_json::from_str to parse the string,
-                // because it handle escaped characters correctly
-                let str = serde_json::from_str(&self.get_current_lexeme()).unwrap();
-                self.add_token(TokenType::String, Some(Literal::String(str)))
-            }
+            ';' => self.add_token(TokenType::Semicolon),
+            '(' => self.add_token(TokenType::LeftParen),
+            ')' => self.add_token(TokenType::RightParen),
+            '{' => self.add_token(TokenType::LeftBrace),
+            '}' => self.add_token(TokenType::RightBrace),
+            '[' => self.add_token(TokenType::LeftBracket),
+            ']' => self.add_token(TokenType::RightBracket),
+            '.' => self.add_token(TokenType::Dot),
+            ',' => self.add_token(TokenType::Comma),
+            ':' => self.add_token(TokenType::Colon),
+            '"' | '\'' => match self.string(c) {
+                Ok(()) => {
+                    self.add_token(TokenType::String);
+                }
+                Err(()) => self.add_token(TokenType::Unknown),
+            },
             '/' => {
-                self.regex();
-                let mut str = self.get_current_lexeme();
-                str.remove(0);
-                str.pop();
-                self.add_token(TokenType::Regex, Some(Literal::String(str)));
-
-                // TODO: ugly
-                self.start = self.current;
-                self.regex_flags();
-                let flags = self.get_current_lexeme();
-                self.add_token(TokenType::RegexFlags, Some(Literal::String(flags)))
+                match self.regex() {
+                    Ok(_) => {
+                        self.add_token(TokenType::Regex);
+                        self.start = self.current;
+                    }
+                    Err(_) => self.add_token(TokenType::Unknown),
+                }
+                match self.regex_flags() {
+                    Ok(_) => self.add_token(TokenType::RegexFlags),
+                    Err(_) => self.add_token(TokenType::Unknown),
+                }
             }
             _ => {
                 if c.is_ascii_digit() || (c == '-' && self.peek().is_numeric()) {
-                    self.digit();
-                    self.add_token(
-                        TokenType::Number,
-                        Some(Literal::Number(
-                            self.get_current_lexeme().parse::<f32>().unwrap(),
-                        )),
-                    );
+                    match self.digit() {
+                        Ok(_) => {
+                            self.add_token(TokenType::Number);
+                        }
+                        Err(_) => {
+                            self.add_token(TokenType::Unknown);
+                        }
+                    }
                 } else if c.is_alphabetic() || (c == '$' || c == '_') {
-                    self.identifier();
-
-                    match self.get_current_lexeme().as_str() {
-                        "true" => self.add_token(TokenType::Bool, Some(Literal::Bool(true))),
-                        "false" => self.add_token(TokenType::Bool, Some(Literal::Bool(false))),
-                        "null" => self.add_token(TokenType::Null, Some(Literal::Null(Null {}))),
-                        _ => self.add_token(
-                            TokenType::Identifier,
-                            Some(Literal::String(self.get_current_lexeme())),
-                        ),
+                    match self.identifier() {
+                        Ok(_) => self.add_token(TokenType::Identifier),
+                        Err(_) => self.add_token(TokenType::Unknown),
                     }
                 } else {
-                    self.error("Unknown character");
+                    self.add_token(TokenType::Unknown);
+                    self.error(
+                        "Unknown character",
+                        UnexpectedTokenError {
+                            expected: TokenType::Unknown,
+                            found: TokenType::Unknown,
+                        },
+                    );
                 }
             }
         };
     }
 
-    fn error(&mut self, message: &str) {
+    fn error(&mut self, message: &str, error: UnexpectedTokenError) {
         self.errors.push(LexerError {
             message: message.to_string(),
-            position: self.current,
+            position: self.tokens.len() - 1,
             line: self.line,
+            token_error: error,
         });
     }
 
-    fn add_token(&mut self, r#type: TokenType, literal: Option<Literal>) {
-        self.tokens.push(Token {
-            r#type,
-            lexeme: self.get_current_lexeme(),
-            literal,
-            line: self.line,
-            position: self.current,
-        });
-    }
+    fn add_token(&mut self, r#type: TokenType) {
+        let lexeme = self.current_string.clone();
 
-    fn get_current_lexeme(&self) -> String {
-        let mut start_byte = None;
-        let mut end_byte = None;
-        for (idx, (byte_pos, _)) in self.source.char_indices().enumerate() {
-            if idx == self.start {
-                start_byte = Some(byte_pos);
-            }
-            if idx == self.current {
-                end_byte = Some(byte_pos);
-                break;
-            }
-        }
+        let mut token_type = r#type.clone();
 
-        let lexeme = if let (Some(start_byte), Some(end_byte)) = (start_byte, end_byte) {
-            self.source[start_byte..end_byte].to_string()
-        } else {
-            String::new()
+        let literal = match r#type {
+            // We are using serde_json::from_str to parse the string,
+            // because it handles new lines correctly.
+            // https://d3lm.medium.com/rust-beware-of-escape-sequences-85ec90e9e243
+            TokenType::String => {
+                let mut data = self.current_string.chars();
+                // To handle case, where string starts with "'"
+                data.next();
+                data.next_back();
+
+                match serde_json::from_str(format!("\"{}\"", data.as_str()).as_str()) {
+                    Ok(value) => Some(Literal::String(value)),
+                    Err(_) => {
+                        token_type = TokenType::Unknown;
+                        None
+                    }
+                }
+            }
+            TokenType::Bool => match lexeme.as_str() {
+                "true" => Some(Literal::Bool(true)),
+                "false" => Some(Literal::Bool(false)),
+                _ => None,
+            },
+            TokenType::Identifier => match lexeme.as_str() {
+                "true" => Some(Literal::Bool(true)),
+                "false" => Some(Literal::Bool(false)),
+                "null" => Some(Literal::Null(Null {})),
+                _ => Some(Literal::String(lexeme.to_string())),
+            },
+            TokenType::Null => Some(Literal::Null(Null {})),
+            TokenType::Number => Some(Literal::Number(Number::from_str(&lexeme).unwrap())),
+            TokenType::Regex => {
+                let regex_value = lexeme[lexeme.chars().next().unwrap().len_utf8()
+                    ..lexeme.len() - lexeme.chars().next_back().unwrap().len_utf8()]
+                    .to_string();
+                Some(Literal::String(regex_value))
+            }
+            TokenType::RegexFlags => Some(Literal::String(lexeme.to_string())),
+            _ => None,
         };
 
-        lexeme
+        self.tokens.push(Token {
+            r#type: token_type,
+            literal,
+            range: Range {
+                start: self.start,
+                end: self.current - 1,
+            },
+            line: self.line,
+            lexeme: lexeme.to_string(),
+        });
     }
 
     fn is_espaced_char_or_espace(&mut self, c: char) -> bool {
         self.peek() == '\\' && (self.peek_next() == c || self.peek_next() == '\\')
     }
 
-    fn string(&mut self) {
-        while self.peek() != '"' && !self.is_at_end() {
+    fn string(&mut self, str_variant: char) -> Result<(), ()> {
+        while self.peek() != str_variant && !self.is_at_end() {
             if self.peek() == '\n' {
-                self.line += 1;
+                self.current_relative = 0;
             }
 
-            if self.is_espaced_char_or_espace('"') {
+            if self.is_espaced_char_or_espace(str_variant) {
                 self.advance();
             }
 
@@ -268,17 +277,24 @@ impl Lexer {
         }
 
         if self.is_at_end() {
-            self.error("Unterminated string");
-            return;
+            self.error(
+                "Unterminated string",
+                UnexpectedTokenError {
+                    expected: TokenType::String,
+                    found: TokenType::Eof,
+                },
+            );
+            return Err(());
         }
 
         self.advance();
+        Ok(())
     }
 
-    fn regex(&mut self) {
+    fn regex(&mut self) -> Result<(), ()> {
         while self.peek() != '/' && !self.is_at_end() {
             if self.peek() == '\n' {
-                self.line += 1;
+                self.current_relative = 0;
             }
 
             if self.is_espaced_char_or_espace('/') {
@@ -289,41 +305,44 @@ impl Lexer {
         }
 
         if self.is_at_end() {
-            self.error("Unterminated regex");
-            return;
+            self.error(
+                "Unterminated regex",
+                UnexpectedTokenError {
+                    expected: TokenType::Regex,
+                    found: TokenType::Eof,
+                },
+            );
+            return Err(());
         }
 
         self.advance();
+        Ok(())
     }
 
-    fn regex_flags(&mut self) {
+    fn regex_flags(&mut self) -> Result<(), ()> {
         let valid_regex_flags = ['i', 'm', 'x', 's', 'u'];
         while valid_regex_flags.iter().any(|&x| self.peek() == x) {
             self.advance();
         }
+
+        Ok(())
     }
 
     fn is_identifier(&mut self) -> bool {
         self.peek().is_ascii_alphabetic() || self.peek() == '$' || self.peek() == '_'
     }
 
-    fn identifier(&mut self) {
+    fn identifier(&mut self) -> Result<(), ()> {
         while self.is_identifier() {
             self.advance();
         }
+
+        Ok(())
     }
 
-    fn digit(&mut self) {
+    fn digit(&mut self) -> Result<(), ()> {
         while self.peek().is_numeric() {
             self.advance();
-        }
-
-        if self.peek() == '-' && self.peek_next().is_numeric() {
-            self.advance();
-
-            while self.peek().is_numeric() {
-                self.advance();
-            }
         }
 
         if self.peek() == '.' && self.peek_next().is_numeric() {
@@ -333,6 +352,8 @@ impl Lexer {
                 self.advance();
             }
         }
+
+        Ok(())
     }
 
     fn peek(&self) -> char {
@@ -340,17 +361,11 @@ impl Lexer {
             return '\0';
         }
 
-        let start = self.source.as_bytes().get(self.current_in_bytes).unwrap();
-        let width = self.utf8_char_width(*start);
-        let bytes: Vec<u8> =
-            self.source.as_bytes()[self.current_in_bytes..self.current_in_bytes + width].to_vec();
+        let end_index = self.current_in_bytes
+            + self.utf8_char_width(*self.source_bytes.get(self.current_in_bytes).unwrap());
+        let bytes = &self.source_bytes[self.current_in_bytes..end_index];
 
-        let ch = match std::str::from_utf8(&bytes) {
-            Ok(s) => s.chars().next().unwrap(),
-            Err(_) => panic!("Invalid UTF-8"),
-        };
-
-        ch
+        std::str::from_utf8(bytes).unwrap().chars().next().unwrap()
     }
 
     fn utf8_char_width(&self, leading_byte: u8) -> usize {
@@ -376,8 +391,12 @@ impl Lexer {
 
     fn advance(&mut self) -> char {
         let ch = self.peek();
-        self.current_in_bytes += ch.len_utf8();
+        let len = ch.len_utf8();
+
+        self.current_in_bytes += len;
         self.current += 1;
+        self.current_string += &ch.to_string();
+        self.current_relative += len;
 
         ch
     }
