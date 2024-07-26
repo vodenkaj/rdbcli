@@ -3,17 +3,21 @@ use std::collections::HashMap;
 use mongodb::bson::Document;
 use rusty_db_cli_mongo::{
     interpreter::{Interpreter, InterpreterError},
-    lexer::Literal,
-    parser::{
-        CallExpression, Callee, Expression, Identifier, MemberExpression, ParametersExpression,
+    parser::Expression,
+    types::{
+        expressions::{CallExpression, Callee, Identifier, MemberExpression, ParametersExpression},
+        literals::Literal,
     },
 };
 use tokio_stream::StreamExt;
 
 use super::connector::{MongodbConnector, SubCommand};
-use crate::connectors::{
-    base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
-    mongodb::connector::{Command, QueryBuilder},
+use crate::{
+    connectors::{
+        base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
+        mongodb::connector::{Command, QueryBuilder},
+    },
+    utils::external_editor::DEBUG_FILE,
 };
 
 pub struct InterpreterMongo<'a> {
@@ -47,7 +51,7 @@ impl<'a> InterpreterMongo<'a> {
     }
 
     pub async fn interpret(mut self, data: String) -> Result<DatabaseData, InterpreterError> {
-        let mut program = Interpreter::new().tokenize(data)?.parse()?;
+        let mut program = Interpreter::new().tokenize(data).parse()?;
         // Our parser performs reverse-ordered tokenization and parsing,
         // -> it constructs an output array where tokens are stored in reverse order
         // compared to their original sequence in the input. And we want to execute the
@@ -82,6 +86,7 @@ impl<'a> InterpreterMongo<'a> {
             let collection_name = self.try_get_next_literal::<String>()?;
             let command_type = self.try_get_next_literal::<String>()?;
             let params = self.consume::<ParametersExpression>()?;
+            DEBUG_FILE.write_log(&params);
             let mut main_command = Command::try_from((command_type, params))?;
 
             while !self.expressions.is_empty() {

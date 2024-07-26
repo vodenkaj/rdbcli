@@ -1,10 +1,12 @@
 use crate::{
     lexer::{Lexer, LexerError, Token},
-    parser::{ParseError, Parser, Program},
+    parser::{ParseError, Parser},
+    types::expressions::Program,
 };
 
 pub struct Interpreter {
     pub tokens: Vec<Token>,
+    pub lexer_error: Option<LexerError>,
 }
 
 #[derive(Debug)]
@@ -50,17 +52,31 @@ impl From<ParseError> for InterpreterError {
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self { tokens: vec![] }
+        Self {
+            tokens: vec![],
+            lexer_error: None,
+        }
     }
 
-    pub fn tokenize(mut self, data: String) -> Result<Self, Vec<LexerError>> {
-        let result = Lexer::new(data).scan_tokens()?;
-        self.tokens = result;
+    pub fn tokenize(mut self, data: String) -> Self {
+        match Lexer::new(data).scan_tokens() {
+            Ok(ok) => {
+                self.tokens = ok;
+            }
+            Err((tokens, mut err)) => {
+                self.tokens = tokens;
+                self.lexer_error = Some(err.remove(0));
+            }
+        }
 
-        Ok(self)
+        self
     }
 
     pub fn parse(self) -> Result<Program, ParseError> {
         Parser::new(self.tokens).parse()
+    }
+
+    pub fn try_parse(&self) -> (Program, Option<ParseError>) {
+        Parser::new(self.tokens.clone()).try_parse()
     }
 }

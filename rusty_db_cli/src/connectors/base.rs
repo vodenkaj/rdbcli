@@ -8,6 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use mongodb::bson::oid::ObjectId;
 use rusty_db_cli_derive_internals::TryFrom;
+use rusty_db_cli_mongo::types::literals::Number;
 
 use crate::widgets::scrollable_table::Row;
 
@@ -51,11 +52,11 @@ impl From<DatabaseData> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, TryFrom)]
+#[derive(Debug, Clone, PartialEq, TryFrom)]
 pub enum DatabaseValue {
     String(String),
     DateTime(chrono::DateTime<chrono::Utc>),
-    Number(i32),
+    Number(Number),
     ObjectId(ObjectId),
     Array(Vec<DatabaseValue>),
     Object(Object),
@@ -63,7 +64,7 @@ pub enum DatabaseValue {
     Null,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Object(pub HashMap<String, DatabaseValue>);
 
 impl From<Object> for serde_json::Value {
