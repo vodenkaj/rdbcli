@@ -93,8 +93,8 @@ impl EventHandler for CommandComponent {
                                         .map(|r| r.as_str().to_string())
                                         .or_else(|| {
                                             let command = m.get(4)?;
-                                            let arg = Command::new("sh")
-                                                .arg("-c")
+                                            let arg = Command::new("zsh")
+                                                .arg("-ci")
                                                 .arg(command.as_str())
                                                 .output()
                                                 .ok()?;

@@ -1,6 +1,6 @@
 use std::{fs::File, io::Read};
 
-use rusty_db_cli_mongo::{interpreter::Interpreter, parser::Node};
+use rusty_db_cli_mongo::{interpreter::Interpreter, types::expressions::Node};
 
 fn main() {
     let mut file = File::open("query.mongo").unwrap();
@@ -9,7 +9,6 @@ fn main() {
 
     Interpreter::new()
         .tokenize(buff)
-        .unwrap()
         .parse()
         .unwrap()
         .get_tree()

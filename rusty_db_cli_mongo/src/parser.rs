@@ -1,17 +1,17 @@
-use std::{convert::From, str::FromStr, usize};
+use std::usize;
 
-use bson::{oid::ObjectId, Bson, DateTime as BsonDateTime};
-use chrono::{DateTime, NaiveDate, Utc};
-use dyn_clone::DynClone;
 use rusty_db_cli_derive_internals::TryFrom;
-use serde::{
-    ser::{Error, SerializeMap},
-    Serialize,
-};
 
 use crate::{
-    interpreter::InterpreterError,
-    lexer::{Literal, Token, TokenType},
+    lexer::{Token, TokenType},
+    types::{
+        errors::UnexpectedTokenError,
+        expressions::{
+            ArrayExpression, CallExpression, CallExpressionPrimary, Callee, ExpressionStatement,
+            Identifier, MemberExpression, MemberExpressionPrimary, ObjectExpression,
+            ParametersExpression, Program, Property, RegexExpression,
+        },
+    },
 };
 
 /// Identifier              -> Literal | ObjectExpression | ArrayExpression
@@ -69,439 +69,9 @@ impl Expression {
     }
 }
 
-impl Node for Expression {
-    fn get_tree(&self) -> TreeNode {
-        match self {
-            Expression::Program(program) => program.get_tree(),
-            Expression::ExpressionStatement(expression_statement) => {
-                expression_statement.get_tree()
-            }
-            Expression::Identifier(identifier) => identifier.get_tree(),
-            Expression::CallExpression(call) => call.get_tree(),
-            Expression::MemberExpression(member) => member.get_tree(),
-            Expression::Property(prop) => prop.get_tree(),
-            Expression::ParametersExpression(params) => params.get_tree(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CallExpressionPrimary {
-    pub params: ParametersExpression,
-    pub callee: Callee,
-}
-
-#[derive(Clone, Debug, TryFrom)]
-pub enum Callee {
-    Identifier(Identifier),
-    Member(MemberExpression),
-}
-
-impl TryFrom<Callee> for Literal {
-    type Error = ();
-
-    fn try_from(value: Callee) -> Result<Self, Self::Error> {
-        if let Callee::Identifier(val) = value {
-            return Literal::try_from(val);
-        }
-        Err(())
-    }
-}
-
-impl Node for Callee {
-    fn get_tree(&self) -> TreeNode {
-        match self {
-            Callee::Identifier(value) => value.get_tree(),
-            Callee::Member(value) => value.get_tree(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct MemberExpressionPrimary {
-    pub object: Identifier,
-    pub property: Identifier,
-}
-
-#[derive(Clone, Debug)]
-pub enum MemberExpression {
-    Primary(MemberExpressionPrimary),
-    Recursive(Box<MemberExpression>, Identifier),
-    Call(Box<CallExpression>),
-}
-
-#[derive(Clone, Debug)]
-pub enum CallExpression {
-    Primary(CallExpressionPrimary),
-    Recursive(Box<CallExpression>, ParametersExpression),
-    Member(Box<MemberExpression>),
-}
-
-impl Serialize for CallExpression {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            CallExpression::Primary(call) => {
-                let key =
-                    String::try_from(Literal::try_from(call.callee.clone()).unwrap()).unwrap();
-
-                match key.as_str() {
-                    "DateTime" => {
-                        if call.params.params.len() > 1 {
-                            return Err(Error::custom("DateTime can only have one parameter"));
-                        }
-
-                        let value =
-                            String::try_from(call.params.get_nth_of_type::<Literal>(0).unwrap())
-                                .unwrap();
-
-                        match parse_date_string(&value) {
-                            Ok(date) => date.serialize(serializer),
-                            Err(err) => Err(Error::custom(err.message)),
-                        }
-                    }
-                    "ObjectId" => {
-                        if call.params.params.len() > 1 {
-                            return Err(Error::custom("ObjectId can only have one parameter"));
-                        }
-                        let value =
-                            String::try_from(call.params.get_nth_of_type::<Literal>(0).unwrap())
-                                .unwrap();
-
-                        ObjectId::from_str(&value).unwrap().serialize(serializer)
-                    }
-                    _ => Err(Error::custom("Invalid primary call expression.")),
-                }
-            }
-            _ => Err(Error::custom(
-                "Non primary call expression cannot be serialized",
-            )),
-        }
-    }
-}
-
-enum ParsedDate {
-    Naive(NaiveDate),
-    DateTime(DateTime<Utc>),
-}
-
-impl Serialize for ParsedDate {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            ParsedDate::Naive(naive) => {
-                let dt = naive.and_hms_opt(0, 0, 0).unwrap();
-                Bson::DateTime(BsonDateTime::from_chrono(
-                    DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc),
-                ))
-                .serialize(serializer)
-            }
-            ParsedDate::DateTime(datetime) => {
-                Bson::DateTime(BsonDateTime::from_chrono(*datetime)).serialize(serializer)
-            }
-        }
-    }
-}
-
-fn parse_date_string(date_str: &str) -> Result<ParsedDate, InterpreterError> {
-    // First, try to parse as NaiveDate
-    if let Ok(naive) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        return Ok(ParsedDate::Naive(naive));
-    }
-
-    // Next, try to parse as DateTime with a timezone
-    if let Ok(datetime) = DateTime::parse_from_rfc3339(date_str) {
-        return Ok(ParsedDate::DateTime(datetime.with_timezone(&Utc)));
-    }
-
-    // If both attempts fail, return an error
-    Err(InterpreterError {
-        message: format!("Expected valid date string, got {} instead", date_str),
-    })
-}
-
-impl Node for CallExpression {
-    fn get_tree(&self) -> TreeNode {
-        match self {
-            CallExpression::Member(val) => val.get_tree(),
-            CallExpression::Primary(val) => val.get_tree(),
-            CallExpression::Recursive(value, params) => TreeNode {
-                name: "CallExpression".to_owned(),
-                children: vec![value.get_tree(), params.get_tree()],
-            },
-        }
-    }
-}
-
-impl Node for MemberExpression {
-    fn get_tree(&self) -> TreeNode {
-        match self {
-            MemberExpression::Call(value) => value.get_tree(),
-            MemberExpression::Primary(value) => value.get_tree(),
-            MemberExpression::Recursive(value, identifier) => TreeNode {
-                name: "MemberExpression".to_owned(),
-                children: vec![value.get_tree(), identifier.get_tree()],
-            },
-        }
-    }
-}
-
-impl From<MemberExpression> for Callee {
-    fn from(val: MemberExpression) -> Self {
-        Callee::Member(val)
-    }
-}
-
-impl From<Identifier> for Callee {
-    fn from(val: Identifier) -> Self {
-        Callee::Identifier(val)
-    }
-}
-
-impl Expressable for MemberExpressionPrimary {
-    fn get_name(&self) -> String {
-        format!("{} - {:?}", stringify!(MemberExpression), self.property)
-    }
-}
-
-impl Node for MemberExpressionPrimary {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "MemberExpression".to_string(),
-            children: vec![self.object.get_tree(), self.property.get_tree()],
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ObjectExpression {
-    pub properties: Vec<Property>,
-}
-
-impl Serialize for ObjectExpression {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut map = serializer.serialize_map(None)?;
-
-        for prop in self.properties.iter() {
-            map.serialize_entry(&prop.key, &prop.value)?;
-        }
-
-        map.end()
-    }
-}
-
-impl Node for ObjectExpression {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "ObjectExpression".to_string(),
-            children: self
-                .properties
-                .clone()
-                .into_iter()
-                .map(|p| p.get_tree())
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Program {
-    pub body: Vec<Expression>,
-}
-
-impl Node for Program {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "Program".to_string(),
-            children: self.body.iter().map(|x| x.get_tree()).collect(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ExpressionStatement {
-    pub expression: CallExpression,
-}
-
-impl Node for ExpressionStatement {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "ExpressionStatement".to_string(),
-            children: vec![self.expression.get_tree()],
-        }
-    }
-}
-
-pub trait Node {
-    fn get_tree(&self) -> TreeNode;
-}
-
-#[derive(Debug, Clone)]
-pub struct Property {
-    pub key: Identifier,
-    pub value: Identifier,
-}
-
-impl Node for Property {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "Property".to_string(),
-            children: vec![self.key.get_tree(), self.value.get_tree()],
-        }
-    }
-}
-
-#[derive(Debug, Clone, TryFrom)]
-pub enum Identifier {
-    Literal(Literal),
-    Object(ObjectExpression),
-    Array(ArrayExpression),
-    Call(Box<CallExpression>),
-    Regex(RegexExpression),
-}
-
-#[derive(Debug, Clone)]
-pub struct RegexExpression {
-    regex: String,
-    flags: String,
-}
-
-impl Serialize for Identifier {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Identifier::Literal(literal) => literal.serialize(serializer),
-            Identifier::Object(obj) => obj.serialize(serializer),
-            Identifier::Array(arr) => arr.serialize(serializer),
-            Identifier::Call(call) => call.serialize(serializer),
-            Identifier::Regex(regex) => bson::Regex {
-                pattern: regex.regex.clone(),
-                options: regex.flags.clone(),
-            }
-            .serialize(serializer),
-        }
-    }
-}
-
-impl Node for Identifier {
-    fn get_tree(&self) -> TreeNode {
-        match self {
-            Identifier::Literal(value) => TreeNode {
-                name: format!("Identifier [{:?}]", value),
-                children: vec![],
-            },
-            Identifier::Object(value) => value.get_tree(),
-            Identifier::Array(value) => value.get_tree(),
-            Identifier::Call(value) => value.get_tree(),
-            Identifier::Regex(_) => TreeNode {
-                name: "Regex".to_string(),
-                children: vec![],
-            },
-        }
-    }
-}
-
-impl Expressable for CallExpressionPrimary {
-    fn get_name(&self) -> String {
-        "CallExpression".to_string()
-    }
-}
-
-impl Node for CallExpressionPrimary {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "CallExpression".to_string(),
-            children: vec![self.callee.get_tree(), self.params.get_tree()],
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ParametersExpression {
-    pub params: Vec<Identifier>,
-}
-
-impl ParametersExpression {
-    pub fn get_nth_of_type<T: TryFrom<Identifier>>(
-        &self,
-        nth: usize,
-    ) -> Result<T, InterpreterError> {
-        if nth >= self.params.len() {
-            return Err(InterpreterError {
-                message: format!(
-                    "Expected parameter at index {} but got {} parameters",
-                    nth,
-                    self.params.len()
-                ),
-            });
-        }
-
-        match T::try_from(self.params.get(nth).unwrap().clone()) {
-            Ok(value) => Ok(value),
-            Err(_) => Err(InterpreterError {
-                message: "Failed to convert parameter".to_string(),
-            }),
-        }
-    }
-}
-
-impl Node for ParametersExpression {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "ParametersExpression".to_string(),
-            children: self
-                .params
-                .clone()
-                .into_iter()
-                .map(|p| p.get_tree())
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ArrayExpression {
-    pub elements: Vec<Identifier>,
-}
-
-impl Serialize for ArrayExpression {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.elements.serialize(serializer)
-    }
-}
-
-impl Node for ArrayExpression {
-    fn get_tree(&self) -> TreeNode {
-        TreeNode {
-            name: "ArrayExpression".to_string(),
-            children: self
-                .elements
-                .clone()
-                .into_iter()
-                .map(|p| p.get_tree())
-                .collect(),
-        }
-    }
-}
-
-trait Expressable: Node + DynClone {
-    fn get_name(&self) -> String;
-}
-
 pub struct Parser {
-    tokens: Vec<Token>,
+    pub tokens: Vec<Token>,
+    pub output: Vec<Expression>,
     current: usize,
 }
 
@@ -509,38 +79,77 @@ pub struct Parser {
 pub struct ParseError {
     pub token_pos: usize,
     pub message: String,
+    pub r#type: UnexpectedTokenError,
+}
+
+#[derive(Default)]
+pub struct ParserOptions {
+    pub end_after_n_exp_statements: Option<usize>,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, current: 0 }
+        Self {
+            tokens,
+            output: Vec::new(),
+            current: 0,
+        }
+    }
+
+    pub fn try_parse(mut self) -> (Program, Option<ParseError>) {
+        let mut last_error = None;
+        loop {
+            match Parser::new(self.tokens.clone()).parse() {
+                Ok(ok) => {
+                    return (ok, last_error);
+                }
+                Err(e) => {
+                    let token_pos = if e.token_pos > 1 {
+                        e.token_pos - 1
+                    } else {
+                        e.token_pos
+                    };
+                    if last_error.is_none() {
+                        last_error = Some(e);
+                    }
+                    if self.tokens.is_empty() {
+                        return (Program { body: Vec::new() }, last_error);
+                    }
+                    let (first, _) = self.tokens.split_at(token_pos);
+                    self.tokens = first.to_vec();
+                }
+            }
+        }
     }
 
     pub fn parse(mut self) -> Result<Program, ParseError> {
-        let mut program = Program { body: Vec::new() };
         while !self.is_at_end() {
             let expr: Result<Expression, ParseError> = match self.peek()?.r#type {
                 TokenType::Identifier => {
-                    if self.check_next(TokenType::Dot)? || self.check_next(TokenType::LeftParen)? {
+                    if self.ensure_next_token().is_ok()
+                        && (self.check_next(TokenType::Dot)?
+                            || self.check_next(TokenType::LeftParen)?)
+                    {
                         Ok(Expression::ExpressionStatement(
                             self.expression_statement()?,
                         ))
                     } else {
-                        Err(ParseError {
-                            token_pos: self.current,
-                            message: "Expected expression, got identifier".to_string(),
-                        })
+                        Ok(Expression::Identifier(self.identifier_expression()?))
                     }
                 }
                 _ => Err(ParseError {
                     token_pos: self.current,
                     message: format!("Expected identifier, got {:?}", self.peek()),
+                    r#type: UnexpectedTokenError {
+                        expected: TokenType::Identifier,
+                        found: self.peek()?.r#type.clone(),
+                    },
                 }),
             };
-            program.body.push(expr?);
+            self.output.push(expr?);
         }
 
-        Ok(program)
+        Ok(Program { body: self.output })
     }
 
     fn expression_statement(&mut self) -> Result<ExpressionStatement, ParseError> {
@@ -564,6 +173,11 @@ impl Parser {
             None => Err(ParseError {
                 token_pos: self.current,
                 message: format!("Expected literal, got {:?}", self.peek()),
+                r#type: UnexpectedTokenError {
+                    // Not entirely correct
+                    expected: TokenType::Identifier,
+                    found: self.peek()?.r#type.clone(),
+                },
             }),
         }
     }
@@ -590,8 +204,12 @@ impl Parser {
 
         if self.is_at_end() {
             return Err(ParseError {
-                token_pos: self.current,
+                token_pos: self.current.saturating_sub(1),
                 message: "Expected end of array expression".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::RightBracket,
+                    found: TokenType::Eof,
+                },
             });
         }
         self.consume(TokenType::RightBracket)?;
@@ -623,7 +241,14 @@ impl Parser {
             Some(val) => Ok(val),
             None => Err(ParseError {
                 token_pos: self.current,
-                message: format!("Expected primary expression, got {:?} instead", self.peek(),),
+                message: format!(
+                    "Expected identifier expression, got {:?} instead",
+                    self.peek(),
+                ),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::Identifier,
+                    found: self.peek()?.r#type.clone(),
+                },
             }),
         }
     }
@@ -667,8 +292,12 @@ impl Parser {
 
         if self.is_at_end() && brackets != 0 {
             return Err(ParseError {
-                token_pos: self.current,
+                token_pos: self.current.saturating_sub(1),
                 message: "Unexpected end of object expression".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::RightBrace,
+                    found: TokenType::Eof,
+                },
             });
         };
 
@@ -677,6 +306,18 @@ impl Parser {
 
     fn parameters_expression(&mut self) -> Result<ParametersExpression, ParseError> {
         self.consume(TokenType::LeftParen)?;
+
+        if self.is_at_end() {
+            return Err(ParseError {
+                token_pos: self.current.saturating_sub(1),
+                message: "Expected ')'".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::RightParen,
+                    found: TokenType::Eof,
+                },
+            });
+        }
+
         let mut args = Vec::new();
         while !self.check(TokenType::RightParen)? {
             args.push(self.identifier_expression()?);
@@ -687,8 +328,12 @@ impl Parser {
 
         if self.is_at_end() {
             return Err(ParseError {
-                token_pos: self.current,
+                token_pos: self.current.saturating_sub(1),
                 message: "Unexpected end of parameters expression".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::RightParen,
+                    found: TokenType::Eof,
+                },
             });
         }
         self.advance()?;
@@ -739,14 +384,7 @@ impl Parser {
         &mut self,
         base: MemberExpression,
     ) -> Result<MemberExpression, ParseError> {
-        if self.is_at_end() {
-            return Err(ParseError {
-                token_pos: self.current,
-                message: "Unexpected end of member expression".to_string(),
-            });
-        }
-
-        if self.check(TokenType::Dot)? {
+        if !self.is_at_end() && self.check(TokenType::Dot)? {
             self.consume(TokenType::Dot)?;
             let object = self.literal_expression()?;
             return self
@@ -758,6 +396,7 @@ impl Parser {
 
     fn member_expression(&mut self) -> Result<MemberExpression, ParseError> {
         let primary_member = self.member_expression_primary()?;
+
         let member = self.member_expression_recursive(MemberExpression::Primary(primary_member))?;
 
         Ok(member)
@@ -771,6 +410,10 @@ impl Parser {
             false => Err(ParseError {
                 token_pos: self.current - 1,
                 message: format!("Expected {:?}, got {:?}", token_type, token),
+                r#type: UnexpectedTokenError {
+                    expected: token_type,
+                    found: token.r#type,
+                },
             }),
         }
     }
@@ -794,20 +437,28 @@ impl Parser {
     }
 
     fn ensure_next_token(&self) -> Result<(), ParseError> {
-        if self.is_at_end() {
+        if self.current + 1 >= self.tokens.len() {
             return Err(ParseError {
-                token_pos: self.current,
+                token_pos: self.current.saturating_sub(1),
                 message: "Unexpected end of program".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::Unknown,
+                    found: TokenType::Eof,
+                },
             });
         }
         Ok(())
     }
 
     fn ensure_token(&self) -> Result<(), ParseError> {
-        if self.current + 1 > self.tokens.len() {
+        if self.is_at_end() {
             return Err(ParseError {
-                token_pos: self.current,
+                token_pos: self.current.saturating_sub(1),
                 message: "Unexpected end of program".to_string(),
+                r#type: UnexpectedTokenError {
+                    expected: TokenType::Unknown,
+                    found: TokenType::Eof,
+                },
             });
         }
         Ok(())
@@ -822,59 +473,4 @@ impl Parser {
     fn is_at_end(&self) -> bool {
         self.current >= self.tokens.len()
     }
-}
-
-#[derive(Default)]
-pub struct PrintOptions {
-    offset: usize,
-    next_on_same_level: bool,
-    edges: Vec<bool>,
-}
-
-impl TreeNode {
-    pub fn print(&self) {
-        self.recursive_print(PrintOptions::default());
-    }
-
-    fn recursive_print(
-        &self,
-        PrintOptions {
-            offset,
-            next_on_same_level,
-            mut edges,
-        }: PrintOptions,
-    ) {
-        let modified_offset = if offset == 0 { offset } else { offset + 2 };
-        let pipe = if next_on_same_level {
-            edges.push(true);
-            "├─"
-        } else {
-            edges.push(false);
-            "└─"
-        };
-
-        let bar: String = (0..modified_offset)
-            .map(|i| {
-                if i % 3 == 0 && edges[i / 3] {
-                    return "│";
-                }
-                " "
-            })
-            .collect();
-
-        println!("{}{} ({})", bar, pipe, self.name);
-
-        for (idx, child) in self.children.iter().enumerate() {
-            child.recursive_print(PrintOptions {
-                offset: modified_offset + 1,
-                next_on_same_level: idx != self.children.len() - 1,
-                edges: edges.clone(),
-            });
-        }
-    }
-}
-
-pub struct TreeNode {
-    pub name: String,
-    pub children: Vec<TreeNode>,
 }
