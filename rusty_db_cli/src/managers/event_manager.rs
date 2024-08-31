@@ -11,7 +11,7 @@ use mongodb::event::command::ConnectionInfo;
 use tokio::{task::JoinHandle, time};
 
 use crate::{
-    connectors::base::DatabaseData,
+    connectors::base::DatabaseFetchResult,
     managers::window_manager::WindowCommand,
     ui::{
         components::{base::Component, command::Message},
@@ -29,7 +29,7 @@ pub enum ConnectionEvent {
 pub enum Event {
     OnInput(OnInputInfo),
     OnMessage(Message),
-    DatabaseData(DatabaseData),
+    DatabaseData(DatabaseFetchResult),
     OnQuery(String),
     OnWindowCommand(WindowCommand),
     OnConnection(ConnectionEvent),
