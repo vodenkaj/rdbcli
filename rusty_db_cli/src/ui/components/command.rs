@@ -14,7 +14,7 @@ use regex::Regex;
 use super::base::{Component, ComponentCreateInfo};
 use crate::{
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
-    utils::external_editor::HISTORY_FILE,
+    utils::{external_editor::HISTORY_FILE, fuzzy::filter_fuzzy_matches},
 };
 
 #[derive(Default, Clone)]
@@ -34,7 +34,8 @@ pub struct Message {
 pub struct CommandComponent {
     info: ComponentCreateInfo<Message>,
     history: Vec<String>,
-    history_index: usize,
+    history_index: i32,
+    history_filtered: Vec<String>,
 }
 
 impl CommandComponent {
@@ -44,21 +45,28 @@ impl CommandComponent {
 
         handle.read_to_string(&mut buffer).unwrap();
 
+        let history: Vec<String> = buffer
+            .split('\n')
+            .collect::<HashSet<&str>>()
+            .into_iter()
+            .filter_map(|s| {
+                if s.is_empty() {
+                    return None;
+                }
+                Some(s.to_string())
+            })
+            .collect();
+
         Self {
             info,
-            history: buffer
-                .split('\n')
-                .collect::<HashSet<&str>>()
-                .into_iter()
-                .filter_map(|s| {
-                    if s.is_empty() {
-                        return None;
-                    }
-                    return Some(s.to_string());
-                })
-                .collect(),
+            history_filtered: history.clone(),
+            history,
             history_index: 0,
         }
+    }
+
+    fn refresh_history_filtered(&mut self) {
+        self.history_filtered = filter_fuzzy_matches(&self.info.data.value, &self.history);
     }
 }
 
@@ -105,26 +113,43 @@ impl EventHandler for CommandComponent {
                     match value.key.code {
                         event::KeyCode::Char(value) => {
                             self.info.data.value += &value.to_string();
+                            self.history_index = -1;
                         }
                         event::KeyCode::Backspace => {
                             self.info.data.value.pop();
+                            self.history_index = -1;
                         }
                         event::KeyCode::Up => {
-                            if let Some(history) = self.history.get(self.history_index) {
+                            if self.history_index == -1 {
+                                self.refresh_history_filtered();
+                                self.history_index = 0;
+                            }
+
+                            if let Some(history) =
+                                self.history_filtered.get(self.history_index as usize)
+                            {
                                 self.info.data.value.clone_from(history);
                                 self.history_index += 1;
                             }
                         }
                         event::KeyCode::Down => {
+                            if self.history_index == -1 {
+                                self.refresh_history_filtered();
+                                self.history_index = 0;
+                            }
+
                             if self.history_index != 0 {
                                 self.history_index -= 1;
 
-                                if let Some(history) = self.history.get(self.history_index) {
+                                if let Some(history) =
+                                    self.history_filtered.get(self.history_index as usize)
+                                {
                                     self.info.data.value.clone_from(history);
                                 }
                             }
                         }
                         event::KeyCode::Enter => {
+                            self.history_index = -1;
                             let (command, arg0) = Regex::new(COMMAND_REGEX)?
                                 .captures(&self.info.data.value)
                                 .map(|m| {

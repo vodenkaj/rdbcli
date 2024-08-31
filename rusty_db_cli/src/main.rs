@@ -19,7 +19,8 @@ async fn main() {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
     let backend = CrosstermBackend::new(stdout);
-    let term = Terminal::new(backend).unwrap();
+    let mut term = Terminal::new(backend).unwrap();
+    term.clear();
     let app = App::new(term).await;
 
     loop {
