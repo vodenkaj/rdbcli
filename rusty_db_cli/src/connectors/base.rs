@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
+    time::SystemTime,
     vec::IntoIter,
 };
 
@@ -35,6 +36,12 @@ impl<'a> Default for TableData<'a> {
 
 #[derive(Debug, Clone)]
 pub struct DatabaseData(pub Vec<Object>);
+
+#[derive(Debug, Clone)]
+pub struct DatabaseFetchResult {
+    pub fetch_start: SystemTime,
+    pub data: DatabaseData,
+}
 
 impl IntoIterator for DatabaseData {
     type Item = Object;

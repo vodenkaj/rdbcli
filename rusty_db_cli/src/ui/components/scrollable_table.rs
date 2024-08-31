@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashSet, fs::File, io::Read, sync::Arc};
+use std::{cmp, collections::HashSet, fs::File, io::Read, sync::Arc, time::SystemTime};
 
 use anyhow::Result;
 use crossterm::event;
@@ -12,7 +12,9 @@ use super::{
     command::{Message, Severity},
 };
 use crate::{
-    connectors::base::{Connector, DatabaseData, Object, PaginationInfo, TableData, LIMIT},
+    connectors::base::{
+        Connector, DatabaseData, DatabaseFetchResult, Object, PaginationInfo, TableData, LIMIT,
+    },
     log_error,
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
     try_from,
@@ -100,6 +102,7 @@ impl ScrollableTableComponent {
         );
         self.is_fetching = true;
         tokio::spawn(async move {
+            let fetch_start = SystemTime::now();
             let result = cloned_conn
                 .lock()
                 .await
@@ -107,7 +110,12 @@ impl ScrollableTableComponent {
                 .await;
             match result {
                 Ok(data) => {
-                    event_sender.send(Event::DatabaseData(data)).unwrap();
+                    event_sender
+                        .send(Event::DatabaseData(DatabaseFetchResult {
+                            data,
+                            fetch_start,
+                        }))
+                        .unwrap();
                 }
                 Err(err) => {
                     log_error!(event_sender, Some(err));
@@ -158,13 +166,32 @@ impl ScrollableTableComponent {
         }
     }
 
-    fn set_data(&mut self, data: DatabaseData) -> anyhow::Result<()> {
-        self.data = data;
+    fn set_data(&mut self, result: DatabaseFetchResult) -> anyhow::Result<()> {
+        self.data = result.data;
         self.info.data = TableData::from(self.data.clone());
         self.horizontal_offset_max = self.info.data.header.cells.len() as i32 - 1;
         self.vertical_offset_max = self.info.data.rows.len() as i32;
         // TODO: We should keep order of the fields between refteches
         self.calculate_cell_widths();
+
+        let cloned_sender = self.info.event_sender.clone();
+        self.info
+            .event_sender
+            .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                cloned_sender
+                    .send(Event::OnMessage(Message {
+                        value: format!(
+                            "Query took {} ms",
+                            SystemTime::now()
+                                .duration_since(result.fetch_start)
+                                .unwrap()
+                                .as_millis()
+                        ),
+                        severity: Severity::Info,
+                    }))
+                    .unwrap();
+            })))
+            .unwrap();
         Ok(())
     }
 
