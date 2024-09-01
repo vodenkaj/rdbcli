@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::Result;
 use async_trait::async_trait;
-use mongodb::bson::oid::ObjectId;
+use mongodb::{
+    bson::oid::ObjectId,
+    results::{CollectionSpecification, CollectionType},
+};
 use rusty_db_cli_derive_internals::TryFrom;
 use rusty_db_cli_mongo::types::literals::Number;
 
@@ -59,7 +62,7 @@ impl From<DatabaseData> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, TryFrom)]
+#[derive(Debug, Clone, TryFrom)]
 pub enum DatabaseValue {
     String(String),
     DateTime(chrono::DateTime<chrono::Utc>),
@@ -68,10 +71,37 @@ pub enum DatabaseValue {
     Array(Vec<DatabaseValue>),
     Object(Object),
     Bool(bool),
+    CollectionInfo(CollectionSpecification),
     Null,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl Into<Object> for CollectionSpecification {
+    fn into(self) -> Object {
+        fn get_str(value: &Object, str: &str) -> Result<String, ()> {
+            match value.get(str).unwrap() {
+                DatabaseValue::String(str) => Ok(str.to_owned()),
+                _ => return Err(()),
+            }
+        }
+
+        let collection_type_str = match self.collection_type {
+            CollectionType::View => "View",
+            CollectionType::Collection => "Collection",
+            CollectionType::Timeseries => "Timeseries",
+            _ => "Missing",
+        };
+
+        Object(HashMap::from_iter([
+            (String::from("name"), DatabaseValue::String(self.name)),
+            (
+                String::from("collection_type"),
+                DatabaseValue::String(collection_type_str.to_owned()),
+            ),
+        ]))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Object(pub HashMap<String, DatabaseValue>);
 
 impl From<Object> for serde_json::Value {
@@ -165,6 +195,9 @@ impl From<DatabaseValue> for serde_json::Value {
             DatabaseValue::Object(obj) => obj.into(),
             DatabaseValue::Bool(bool) => serde_json::Value::Bool(bool),
             DatabaseValue::Null => serde_json::Value::Null,
+            DatabaseValue::CollectionInfo(_) => {
+                todo!("Should not be ever needed")
+            }
         }
     }
 }
