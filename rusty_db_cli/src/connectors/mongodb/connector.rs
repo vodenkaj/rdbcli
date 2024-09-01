@@ -7,7 +7,7 @@ use mongodb::{
     bson::{doc, from_document, to_bson, Bson, Document},
     options::{AggregateOptions, ClientOptions, DistinctOptions, FindOptions},
     results::CollectionSpecification,
-    Client, Collection, Cursor, Database,
+    Client, Collection, Cursor, Database, IndexModel,
 };
 use rusty_db_cli_mongo::{
     interpreter::InterpreterError,
@@ -83,6 +83,7 @@ impl TryFrom<(String, ParametersExpression)> for Command {
 
     fn try_from((command, params): (String, ParametersExpression)) -> Result<Self, Self::Error> {
         match command.to_lowercase().as_str() {
+            "getindexes" => Ok(Command::GetIndexes(GetIndexesQuery)),
             "find" => {
                 if params.params.len() > 2 {
                     return Err(InterpreterError {
@@ -234,6 +235,9 @@ pub struct FindQuery {
 }
 
 #[derive(Default)]
+pub struct GetIndexesQuery;
+
+#[derive(Default)]
 pub struct AggregateQuery {
     pipelines: Vec<Document>,
     options: AggregateOptions,
@@ -257,6 +261,7 @@ pub enum Command {
     Count(CountQuery),
     Aggregate(AggregateQuery),
     Distinct(DistinctQuery),
+    GetIndexes(GetIndexesQuery),
 }
 
 // TODO: Update queries
@@ -282,6 +287,7 @@ impl QueryBuilder for Command {
             Command::Count(count) => count.build(collection, pagination).await,
             Command::Aggregate(aggregate) => aggregate.build(collection, pagination).await,
             Command::Distinct(distinct) => distinct.build(collection, pagination).await,
+            Command::GetIndexes(getIndexes) => getIndexes.build(collection, pagination).await,
         }
     }
 }
@@ -341,6 +347,19 @@ impl QueryBuilder for DistinctQuery {
             collection
                 .distinct(self.field, self.filter, self.options)
                 .await?,
+        ))
+    }
+}
+
+#[async_trait]
+impl QueryBuilder for GetIndexesQuery {
+    async fn build(
+        self,
+        collection: Collection<Document>,
+        _: PaginationInfo,
+    ) -> Result<DatabaseResponse, mongodb::error::Error> {
+        Ok(DatabaseResponse::CursorIndexes(
+            collection.list_indexes(None).await?,
         ))
     }
 }
@@ -414,6 +433,7 @@ impl QueryBuilder for AggregateQuery {
 pub enum DatabaseResponse {
     Cursor(Cursor<Document>),
     CursorCollectionSpec(Cursor<CollectionSpecification>),
+    CursorIndexes(Cursor<IndexModel>),
     Bson(Vec<Bson>),
 }
 
@@ -579,6 +599,20 @@ impl TryFrom<Document> for DatabaseValue {
                 acc
             },
         )))
+    }
+}
+
+impl TryFrom<IndexModel> for DatabaseValue {
+    type Error = ();
+
+    fn try_from(value: IndexModel) -> Result<Self, Self::Error> {
+        let mut doc = value.keys.clone();
+        if let Some(opts) = value.options {
+            if let Some(name) = opts.name {
+                doc.insert("index_name", name);
+            }
+        }
+        DatabaseValue::try_from(doc)
     }
 }
 

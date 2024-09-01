@@ -132,6 +132,24 @@ impl<'a> InterpreterMongo<'a> {
                         }
                     }
                 }
+                super::connector::DatabaseResponse::CursorIndexes(mut cursor) => {
+                    while let Some(doc) = cursor.try_next().await.unwrap() {
+                        let converted_doc = try_from!(<DatabaseValue>(doc))?;
+                        match converted_doc {
+                            DatabaseValue::Object(obj) => {
+                                result.push(obj);
+                            }
+                            _ => {
+                                return Err(InterpreterError {
+                                    message: "Database returned unexpected value".to_string(),
+                                })
+                            }
+                        }
+                        if result.len() >= MAXIMUM_DOCUMENTS {
+                            break;
+                        }
+                    }
+                }
                 super::connector::DatabaseResponse::Bson(bson_arr) => {
                     for bson in bson_arr {
                         let converted_bson = try_from!(<DatabaseValue>(bson))?;
