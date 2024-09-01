@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mongodb::bson::Document;
+use mongodb::{bson::Document, Database};
 use rusty_db_cli_mongo::{
     interpreter::{Interpreter, InterpreterError},
     parser::Expression,
@@ -11,7 +11,7 @@ use rusty_db_cli_mongo::{
 };
 use tokio_stream::StreamExt;
 
-use super::connector::{MongodbConnector, SubCommand};
+use super::connector::{DatabaseResponse, MongodbConnector, SubCommand};
 use crate::{
     connectors::{
         base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
@@ -83,27 +83,20 @@ impl<'a> InterpreterMongo<'a> {
         if self.try_get_next_literal::<String>()? == "db" {
             let db = self.connector.get_handle();
 
-            let collection_name = self.try_get_next_literal::<String>()?;
-            let command_type = self.try_get_next_literal::<String>()?;
-            let params = self.consume::<ParametersExpression>()?;
-            DEBUG_FILE.write_log(&params);
-            let mut main_command = Command::try_from((command_type, params))?;
-
-            while !self.expressions.is_empty() {
-                let command = self.try_get_next_literal::<String>()?;
-                let params = self.consume::<ParametersExpression>()?;
-
-                main_command.add_sub_query(SubCommand::try_from((command, params))?)?;
-            }
-
-            let collection: mongodb::Collection<Document> = db.collection(&collection_name);
-
-            let database_response = main_command
-                .build(collection, self.pagination)
-                .await
-                .unwrap();
+            let next_literal = self.try_get_next_literal::<String>()?;
 
             let mut result: DatabaseData = DatabaseData(Vec::new());
+
+            let database_response = if next_literal == "getCollectionNames" {
+                DatabaseResponse::CursorCollectionSpec(
+                    db.list_collections(None, None).await.unwrap(),
+                )
+            } else {
+                self.execute_command_expression(&next_literal, db)
+                    .await
+                    .unwrap()
+            };
+
             match database_response {
                 super::connector::DatabaseResponse::Cursor(mut cursor) => {
                     while let Some(doc) = cursor.try_next().await.unwrap() {
@@ -120,6 +113,22 @@ impl<'a> InterpreterMongo<'a> {
                         }
                         if result.len() >= MAXIMUM_DOCUMENTS {
                             break;
+                        }
+                    }
+                }
+                DatabaseResponse::CursorCollectionSpec(mut cursor) => {
+                    while let Some(doc) = cursor.try_next().await.unwrap() {
+                        let converted_doc = DatabaseValue::CollectionInfo(doc);
+
+                        match converted_doc {
+                            DatabaseValue::CollectionInfo(info) => {
+                                result.push(info.into());
+                            }
+                            _ => {
+                                return Err(InterpreterError {
+                                    message: "Database returned unexpected value".to_string(),
+                                })
+                            }
                         }
                     }
                 }
@@ -144,6 +153,31 @@ impl<'a> InterpreterMongo<'a> {
         Err(InterpreterError {
             message: "Failed to execute db call".to_string(),
         })
+    }
+
+    async fn execute_command_expression(
+        &mut self,
+        collection_name: &str,
+        db: Database,
+    ) -> Result<DatabaseResponse, InterpreterError> {
+        let command_type = self.try_get_next_literal::<String>()?;
+        let params = self.consume::<ParametersExpression>()?;
+        DEBUG_FILE.write_log(&params);
+        let mut main_command = Command::try_from((command_type, params))?;
+
+        while !self.expressions.is_empty() {
+            let command = self.try_get_next_literal::<String>()?;
+            let params = self.consume::<ParametersExpression>()?;
+
+            main_command.add_sub_query(SubCommand::try_from((command, params))?)?;
+        }
+
+        let collection: mongodb::Collection<Document> = db.collection(collection_name);
+
+        Ok(main_command
+            .build(collection, self.pagination)
+            .await
+            .unwrap())
     }
 
     fn try_get_next_literal<T: TryFrom<Literal>>(&mut self) -> Result<T, InterpreterError> {

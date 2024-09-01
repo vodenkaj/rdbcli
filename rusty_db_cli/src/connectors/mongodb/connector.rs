@@ -6,6 +6,7 @@ use chrono::TimeZone;
 use mongodb::{
     bson::{doc, from_document, to_bson, Bson, Document},
     options::{AggregateOptions, ClientOptions, DistinctOptions, FindOptions},
+    results::CollectionSpecification,
     Client, Collection, Cursor, Database,
 };
 use rusty_db_cli_mongo::{
@@ -412,6 +413,7 @@ impl QueryBuilder for AggregateQuery {
 
 pub enum DatabaseResponse {
     Cursor(Cursor<Document>),
+    CursorCollectionSpec(Cursor<CollectionSpecification>),
     Bson(Vec<Bson>),
 }
 
