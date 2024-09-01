@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use mongodb::{
     bson::oid::ObjectId,
     results::{CollectionSpecification, CollectionType},
+    IndexModel,
 };
 use rusty_db_cli_derive_internals::TryFrom;
 use rusty_db_cli_mongo::types::literals::Number;
@@ -72,6 +73,7 @@ pub enum DatabaseValue {
     Object(Object),
     Bool(bool),
     CollectionInfo(CollectionSpecification),
+    Index(IndexModel),
     Null,
 }
 
@@ -197,6 +199,9 @@ impl From<DatabaseValue> for serde_json::Value {
             DatabaseValue::Null => serde_json::Value::Null,
             DatabaseValue::CollectionInfo(_) => {
                 todo!("Should not be ever needed")
+            }
+            DatabaseValue::Index(index) => {
+                todo!();
             }
         }
     }
