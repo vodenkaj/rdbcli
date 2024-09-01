@@ -17,6 +17,7 @@ use rusty_db_cli_mongo::{
         literals::{Literal, Number},
     },
 };
+use serde_json::Map;
 
 use super::interpreter::InterpreterMongo;
 use crate::{
@@ -232,6 +233,7 @@ pub struct FindQuery {
     options: FindOptions,
     count: bool,
     filter: Option<Document>,
+    explain: bool,
 }
 
 #[derive(Default)]
@@ -281,13 +283,18 @@ impl QueryBuilder for Command {
         self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
+        database: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         match self {
-            Command::Find(find) => find.build(collection, pagination).await,
-            Command::Count(count) => count.build(collection, pagination).await,
-            Command::Aggregate(aggregate) => aggregate.build(collection, pagination).await,
-            Command::Distinct(distinct) => distinct.build(collection, pagination).await,
-            Command::GetIndexes(getIndexes) => getIndexes.build(collection, pagination).await,
+            Command::Find(find) => find.build(collection, pagination, database).await,
+            Command::Count(count) => count.build(collection, pagination, database).await,
+            Command::Aggregate(aggregate) => {
+                aggregate.build(collection, pagination, database).await
+            }
+            Command::Distinct(distinct) => distinct.build(collection, pagination, database).await,
+            Command::GetIndexes(getIndexes) => {
+                getIndexes.build(collection, pagination, database).await
+            }
         }
     }
 }
@@ -307,6 +314,9 @@ impl QueryBuilder for FindQuery {
             SubCommand::AllowDiskUse => {
                 self.options.allow_disk_use = Some(true);
             }
+            SubCommand::Explain => {
+                self.explain = true;
+            }
         }
 
         Ok(())
@@ -316,8 +326,27 @@ impl QueryBuilder for FindQuery {
         mut self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
+        database: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
-        Ok(if self.count {
+        Ok(if self.explain {
+            let mut doc = Document::new();
+
+            let mut map = Map::new();
+            map.insert(String::from("find"), collection.name().into());
+
+            if let Some(filter) = self.filter {
+                map.insert(
+                    String::from("filter"),
+                    mongodb::bson::from_bson(mongodb::bson::Bson::Document(filter)).unwrap(),
+                );
+            }
+            doc.insert("explain", Bson::try_from(map).unwrap());
+
+            DatabaseResponse::Bson(vec![mongodb::bson::Bson::Document(
+                database.run_command(doc, None).await?,
+            )])
+        } else if self.count {
+            // TODO: Explain does not work with count currently
             let mut pipelines = Vec::new();
             if self.filter.is_some() {
                 pipelines.push(doc! { "$match": self.filter.unwrap()});
@@ -342,6 +371,7 @@ impl QueryBuilder for DistinctQuery {
         self,
         collection: Collection<Document>,
         _: PaginationInfo,
+        _: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         Ok(DatabaseResponse::Bson(
             collection
@@ -357,6 +387,7 @@ impl QueryBuilder for GetIndexesQuery {
         self,
         collection: Collection<Document>,
         _: PaginationInfo,
+        _: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         Ok(DatabaseResponse::CursorIndexes(
             collection.list_indexes(None).await?,
@@ -382,6 +413,7 @@ impl QueryBuilder for CountQuery {
         self,
         collection: Collection<Document>,
         _: PaginationInfo,
+        _: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         let mut pipelines = vec![doc! {"$count": "count"}];
         if self.filter.is_some() {
@@ -416,6 +448,7 @@ impl QueryBuilder for AggregateQuery {
         mut self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
+        _: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         let mut aggregate_options = AggregateOptions::default();
         aggregate_options.allow_disk_use = self.options.allow_disk_use;
@@ -448,6 +481,7 @@ pub trait QueryBuilder {
         self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
+        database: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error>;
 }
 
@@ -457,6 +491,7 @@ pub enum SubCommand {
     Count,
     Sort(Option<Document>),
     AllowDiskUse,
+    Explain,
 }
 
 impl TryFrom<(String, ParametersExpression)> for SubCommand {
@@ -498,6 +533,7 @@ impl TryFrom<(String, ParametersExpression)> for SubCommand {
 
                 Ok(SubCommand::AllowDiskUse)
             }
+            "explain" => Ok(SubCommand::Explain),
             _ => Err(InterpreterError {
                 message: "Unknown subcommand".to_string(),
             }),
