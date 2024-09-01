@@ -125,10 +125,14 @@ impl ScrollableTableComponent {
     }
 
     pub fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
-        // TODO: Does not work, fix this :)
         match dir {
             VerticalDirection::Down => {
-                self.vertical_offset = cmp::min(self.vertical_offset + 1, self.vertical_offset_max);
+                if self.vertical_offset == 0 {
+                    self.vertical_offset = 2;
+                } else {
+                    self.vertical_offset =
+                        cmp::min(self.vertical_offset + 1, self.vertical_offset_max);
+                }
             }
             VerticalDirection::Up => {
                 self.vertical_offset = cmp::max(self.vertical_offset - 1, 1);
