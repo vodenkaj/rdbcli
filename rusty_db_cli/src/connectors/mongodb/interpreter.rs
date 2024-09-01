@@ -193,7 +193,7 @@ impl<'a> InterpreterMongo<'a> {
         let collection: mongodb::Collection<Document> = db.collection(collection_name);
 
         Ok(main_command
-            .build(collection, self.pagination)
+            .build(collection, self.pagination, db)
             .await
             .unwrap())
     }
