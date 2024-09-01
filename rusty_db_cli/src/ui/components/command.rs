@@ -107,10 +107,15 @@ impl EventHandler for CommandComponent {
             Event::OnInput(value) => {
                 if matches!(value.mode, crate::application::Mode::Input) {
                     if !matches!(self.info.data.severity, Severity::Normal) {
-                        self.info.data = Message::default()
+                        self.info.data = Message::default();
+                        self.history_index = 0;
                     }
 
                     match value.key.code {
+                        event::KeyCode::Esc => {
+                            self.info.data = Message::default();
+                            self.history_index = 0;
+                        }
                         event::KeyCode::Char(value) => {
                             self.info.data.value += &value.to_string();
                             self.history_index = -1;
