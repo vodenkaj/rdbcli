@@ -62,6 +62,26 @@ impl From<Number> for serde_json::Number {
     }
 }
 
+impl From<Number> for u64 {
+    fn from(val: Number) -> Self {
+        match val {
+            Number::F64(v) => v as u64,
+            Number::I64(v) => v as u64,
+            Number::I32(v) => v as u64,
+        }
+    }
+}
+
+impl From<Number> for i64 {
+    fn from(val: Number) -> Self {
+        match val {
+            Number::F64(v) => v as i64,
+            Number::I64(v) => v,
+            Number::I32(v) => v as i64,
+        }
+    }
+}
+
 impl Serialize for Number {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
