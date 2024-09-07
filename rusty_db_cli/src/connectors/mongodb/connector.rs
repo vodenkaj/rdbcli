@@ -13,7 +13,7 @@ use rusty_db_cli_mongo::{
     interpreter::InterpreterError,
     to_interpter_error,
     types::{
-        expressions::{ArrayExpression, ObjectExpression, ParametersExpression},
+        expressions::{ArrayExpression, Identifier, ObjectExpression, ParametersExpression},
         literals::{Literal, Number},
     },
 };
@@ -164,6 +164,9 @@ impl TryFrom<(String, ParametersExpression)> for Command {
                 Ok(Command::Aggregate(AggregateQuery {
                     pipelines,
                     options: AggregateOptions::default(),
+                    limit: None,
+                    skip: None,
+                    explain: false,
                 }))
             }
             "distinct" => {
@@ -243,6 +246,9 @@ pub struct GetIndexesQuery;
 pub struct AggregateQuery {
     pipelines: Vec<Document>,
     options: AggregateOptions,
+    skip: Option<u64>,
+    limit: Option<i64>,
+    explain: bool,
 }
 
 #[derive(Default)]
@@ -292,8 +298,8 @@ impl QueryBuilder for Command {
                 aggregate.build(collection, pagination, database).await
             }
             Command::Distinct(distinct) => distinct.build(collection, pagination, database).await,
-            Command::GetIndexes(getIndexes) => {
-                getIndexes.build(collection, pagination, database).await
+            Command::GetIndexes(get_indexes) => {
+                get_indexes.build(collection, pagination, database).await
             }
         }
     }
@@ -302,7 +308,6 @@ impl QueryBuilder for Command {
 #[async_trait]
 impl QueryBuilder for FindQuery {
     fn add_sub_query(&mut self, query: SubCommand) -> Result<(), InterpreterError> {
-        self.options.limit = Some(100);
         self.options.batch_size = Some(50);
         match query {
             SubCommand::Count => {
@@ -316,6 +321,15 @@ impl QueryBuilder for FindQuery {
             }
             SubCommand::Explain => {
                 self.explain = true;
+            }
+            SubCommand::Hint(hint) => {
+                self.options.hint = hint;
+            }
+            SubCommand::Skip(amount) => {
+                self.options.skip = amount;
+            }
+            SubCommand::Limit(amount) => {
+                self.options.limit = amount;
             }
         }
 
@@ -340,6 +354,22 @@ impl QueryBuilder for FindQuery {
                     mongodb::bson::from_bson(mongodb::bson::Bson::Document(filter)).unwrap(),
                 );
             }
+
+            if let Some(hint) = self.options.hint {
+                match hint {
+                    mongodb::options::Hint::Keys(doc) => {
+                        map.insert(
+                            String::from("hint"),
+                            mongodb::bson::from_bson(mongodb::bson::Bson::Document(doc)).unwrap(),
+                        );
+                    }
+                    mongodb::options::Hint::Name(name) => {
+                        map.insert(String::from("hint"), name.into());
+                    }
+                    _ => {}
+                }
+            }
+
             doc.insert("explain", Bson::try_from(map).unwrap());
 
             DatabaseResponse::Bson(vec![mongodb::bson::Bson::Document(
@@ -359,7 +389,8 @@ impl QueryBuilder for FindQuery {
             DatabaseResponse::Cursor(collection.aggregate(pipelines, aggregate_options).await?)
         } else {
             self.options.skip = Some(pagination.start);
-            self.options.limit = Some(pagination.limit as i64);
+            self.options.limit = Some(self.options.limit.unwrap_or(pagination.limit as i64));
+
             DatabaseResponse::Cursor(collection.find(self.filter, self.options).await?)
         })
     }
@@ -438,6 +469,22 @@ impl QueryBuilder for AggregateQuery {
                 self.options.allow_disk_use = Some(true);
                 Ok(())
             }
+            SubCommand::Explain => {
+                self.explain = true;
+                Ok(())
+            }
+            SubCommand::Hint(hint) => {
+                self.options.hint = hint;
+                Ok(())
+            }
+            SubCommand::Skip(amount) => {
+                self.skip = amount;
+                Ok(())
+            }
+            SubCommand::Limit(amount) => {
+                self.limit = amount;
+                Ok(())
+            }
             _ => Err(InterpreterError {
                 message: format!("Aggregate does not support {:?}", query),
             }),
@@ -448,12 +495,45 @@ impl QueryBuilder for AggregateQuery {
         mut self,
         collection: Collection<Document>,
         pagination: PaginationInfo,
-        _: Database,
+        database: Database,
     ) -> Result<DatabaseResponse, mongodb::error::Error> {
         let mut aggregate_options = AggregateOptions::default();
         aggregate_options.allow_disk_use = self.options.allow_disk_use;
-        self.pipelines.push(doc! {"$skip": pagination.start as u32});
-        self.pipelines.push(doc! {"$limit": pagination.limit});
+
+        self.pipelines
+            .push(doc! {"$skip": (pagination.start + self.skip.unwrap_or(0)) as u32});
+        self.pipelines
+            .push(doc! {"$limit": self.limit.unwrap_or(pagination.limit as i64) });
+
+        if self.explain {
+            let mut doc = Document::new();
+
+            let mut map = Map::new();
+
+            map.insert(String::from("aggregate"), collection.name().into());
+            map.insert(
+                String::from("pipeline"),
+                self.pipelines
+                    .into_iter()
+                    .map(|pipeline| {
+                        mongodb::bson::from_bson::<serde_json::Value>(
+                            mongodb::bson::Bson::Document(pipeline),
+                        )
+                        .unwrap()
+                    })
+                    .collect(),
+            );
+            // Required for MongoDB aggregation queries, but it can be left empty for explain purposes
+            map.insert(
+                String::from("cursor"),
+                mongodb::bson::from_document(Document::new()).unwrap(),
+            );
+            doc.insert("explain", Bson::try_from(map).unwrap());
+
+            return Ok(DatabaseResponse::Bson(vec![mongodb::bson::Bson::Document(
+                database.run_command(doc, None).await?,
+            )]));
+        }
 
         Ok(DatabaseResponse::Cursor(
             collection
@@ -492,6 +572,9 @@ pub enum SubCommand {
     Sort(Option<Document>),
     AllowDiskUse,
     Explain,
+    Hint(Option<mongodb::options::Hint>),
+    Skip(Option<u64>),
+    Limit(Option<i64>),
 }
 
 impl TryFrom<(String, ParametersExpression)> for SubCommand {
@@ -534,6 +617,48 @@ impl TryFrom<(String, ParametersExpression)> for SubCommand {
                 Ok(SubCommand::AllowDiskUse)
             }
             "explain" => Ok(SubCommand::Explain),
+            "skip" => {
+                if params.params.len() > 1 {
+                    return Err(InterpreterError {
+                        message: "Skip command only accepts 1 parameter".to_string(),
+                    });
+                }
+
+                let amount: u64 =
+                    try_from!(<Number>(params.get_nth_of_type::<Literal>(0)?))?.into();
+
+                Ok(SubCommand::Skip(Some(amount)))
+            }
+            "limit" => {
+                if params.params.len() > 1 {
+                    return Err(InterpreterError {
+                        message: "Limit command only accepts 1 parameter".to_string(),
+                    });
+                }
+
+                let amount: i64 =
+                    try_from!(<Number>(params.get_nth_of_type::<Literal>(0)?))?.into();
+
+                Ok(SubCommand::Limit(Some(amount)))
+            }
+            "hint" => {
+                if params.params.len() > 1 {
+                    return Err(InterpreterError {
+                        message: "Hint command only accepts 1 parameter".to_string(),
+                    });
+                }
+
+                let index_spec = params.get_nth_of_type::<Identifier>(0)?;
+                if let Bson::Document(doc) = to_interpter_error!(to_bson(&index_spec))? {
+                    return Ok(SubCommand::Hint(Some(mongodb::options::Hint::Keys(doc))));
+                } else if let Identifier::Literal(Literal::String(str)) = index_spec {
+                    return Ok(SubCommand::Hint(Some(mongodb::options::Hint::Name(str))));
+                }
+
+                Err(InterpreterError {
+                    message: "Hint command only accepts object or string parameter".to_string(),
+                })
+            }
             _ => Err(InterpreterError {
                 message: "Unknown subcommand".to_string(),
             }),
