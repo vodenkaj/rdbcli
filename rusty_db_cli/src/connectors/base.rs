@@ -45,6 +45,7 @@ pub struct DatabaseData(pub Vec<Object>);
 pub struct DatabaseFetchResult {
     pub fetch_start: SystemTime,
     pub data: DatabaseData,
+    pub trigger_query_took_message: bool,
 }
 
 impl IntoIterator for DatabaseData {

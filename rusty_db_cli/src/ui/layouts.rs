@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use once_cell::sync::Lazy;
 use ratatui::layout::Constraint;
 
 use super::{
@@ -22,18 +23,30 @@ use crate::{
 };
 
 #[derive(clap::Parser)]
-struct CliArgs {
+pub struct CliArgs {
     /// Value in format like this: mongodb+srv://[username:password@]host[/[defaultauthdb][?options]]
     #[clap(name = "DATABASE_URI")]
-    database_uri: String,
+    pub database_uri: String,
+
+    /// Enables debug logs, that are stored in $HOME/.config/rusty-db-cli/debug.log
+    #[arg(long, default_value_t = false)]
+    pub debug: bool,
+
+    /// Disables storing of command history into the file located in
+    /// $HOME/.config/rusty-db-cli/.command_history.txt
+    #[arg(long, name="disable-command-history", default_value_t = false, action = clap::ArgAction::SetTrue)]
+    pub disable_command_history: bool,
 }
+
+pub static CLI_ARGS: Lazy<CliArgs> = Lazy::new(CliArgs::parse);
 
 pub async fn get_table_layout() -> Window {
     let event_manager = EventManager::new();
-    let CliArgs { database_uri } = CliArgs::parse();
 
-    let connector = if database_uri.contains("mongodb") {
-        MongodbConnectorBuilder::new(&database_uri).build().await
+    let connector = if CLI_ARGS.database_uri.contains("mongodb") {
+        MongodbConnectorBuilder::new(&CLI_ARGS.database_uri)
+            .build()
+            .await
     } else {
         panic!("Other connectors are not implemented");
     }

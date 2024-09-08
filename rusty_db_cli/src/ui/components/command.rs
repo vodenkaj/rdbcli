@@ -14,6 +14,7 @@ use regex::Regex;
 use super::base::{Component, ComponentCreateInfo};
 use crate::{
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
+    ui::layouts::CLI_ARGS,
     utils::{external_editor::HISTORY_FILE, fuzzy::filter_fuzzy_matches},
 };
 
@@ -188,15 +189,18 @@ impl EventHandler for CommandComponent {
                                 .with_context(|| "Invalid command")??;
 
                             let issued_command = self.info.data.value.clone();
-                            thread::spawn(move || {
-                                let mut handle = OpenOptions::new()
-                                    .append(true)
-                                    .open(HISTORY_FILE.to_string())
-                                    .unwrap();
-                                handle
-                                    .write_all(format!("{}\n", issued_command).as_bytes())
-                                    .unwrap();
-                            });
+
+                            if !CLI_ARGS.disable_command_history {
+                                thread::spawn(move || {
+                                    let mut handle = OpenOptions::new()
+                                        .append(true)
+                                        .open(HISTORY_FILE.to_string())
+                                        .unwrap();
+                                    handle
+                                        .write_all(format!("{}\n", issued_command).as_bytes())
+                                        .unwrap();
+                                });
+                            }
 
                             match command {
                                 "use" => {
