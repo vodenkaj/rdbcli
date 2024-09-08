@@ -16,7 +16,7 @@ pub struct ComponentCreateInfo<T> {
     pub event_sender: Sender<Event>,
 }
 
-pub trait Component: EventHandler {
+pub trait Component: EventHandler + Send {
     fn get_constraint(&self) -> Constraint;
     fn is_visible(&self) -> bool;
     fn set_visibility(&mut self, visible: bool) -> bool;
