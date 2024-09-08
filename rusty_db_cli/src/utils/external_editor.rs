@@ -10,6 +10,8 @@ use std::{
 
 use once_cell::sync::Lazy;
 
+use crate::ui::layouts::CLI_ARGS;
+
 pub struct ExternalEditor {
     editor: String,
 }
@@ -138,6 +140,10 @@ impl DebugFile {
     }
 
     pub fn write_log(&self, data: &impl Debug) {
+        if !CLI_ARGS.debug {
+            return;
+        }
+
         let mut file = OpenOptions::new()
             .write(true)
             .append(true)

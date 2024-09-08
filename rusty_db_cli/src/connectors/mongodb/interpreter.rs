@@ -4,6 +4,7 @@ use mongodb::{bson::Document, Database};
 use rusty_db_cli_mongo::{
     interpreter::{Interpreter, InterpreterError},
     parser::Expression,
+    to_interpter_error,
     types::{
         expressions::{CallExpression, Callee, Identifier, MemberExpression, ParametersExpression},
         literals::Literal,
@@ -12,12 +13,9 @@ use rusty_db_cli_mongo::{
 use tokio_stream::StreamExt;
 
 use super::connector::{DatabaseResponse, MongodbConnector, SubCommand};
-use crate::{
-    connectors::{
-        base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
-        mongodb::connector::{Command, QueryBuilder},
-    },
-    utils::external_editor::DEBUG_FILE,
+use crate::connectors::{
+    base::{DatabaseData, DatabaseValue, Object, PaginationInfo},
+    mongodb::connector::{Command, QueryBuilder},
 };
 
 pub struct InterpreterMongo<'a> {
@@ -88,13 +86,11 @@ impl<'a> InterpreterMongo<'a> {
             let mut result: DatabaseData = DatabaseData(Vec::new());
 
             let database_response = if next_literal == "getCollectionNames" {
-                DatabaseResponse::CursorCollectionSpec(
-                    db.list_collections(None, None).await.unwrap(),
-                )
+                DatabaseResponse::CursorCollectionSpec(to_interpter_error!(
+                    db.list_collections(None, None).await
+                )?)
             } else {
-                self.execute_command_expression(&next_literal, db)
-                    .await
-                    .unwrap()
+                self.execute_command_expression(&next_literal, db).await?
             };
 
             match database_response {
@@ -180,7 +176,6 @@ impl<'a> InterpreterMongo<'a> {
     ) -> Result<DatabaseResponse, InterpreterError> {
         let command_type = self.try_get_next_literal::<String>()?;
         let params = self.consume::<ParametersExpression>()?;
-        DEBUG_FILE.write_log(&params);
         let mut main_command = Command::try_from((command_type, params))?;
 
         while !self.expressions.is_empty() {
