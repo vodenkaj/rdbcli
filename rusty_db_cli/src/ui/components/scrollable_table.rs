@@ -18,7 +18,7 @@ use crate::{
     managers::event_manager::{ConnectionEvent, Event, EventHandler},
     try_from,
     types::{HorizontalDirection, VerticalDirection},
-    utils::external_editor::{FileType, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
+    utils::external_editor::{FileType, DEBUG_FILE, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
     widgets::{
         scrollable_table::{Row, ScrollableTable, ScrollableTableState},
         throbber::{get_throbber_data, Throbber, ThrobberState},
@@ -123,10 +123,19 @@ impl ScrollableTableComponent {
                         .send(Event::DatabaseData(DatabaseFetchResult {
                             data,
                             fetch_start,
+                            trigger_query_took_message: true,
                         }))
                         .unwrap();
                 }
                 Err(err) => {
+                    DEBUG_FILE.write_log(&err);
+                    event_sender
+                        .send(Event::DatabaseData(DatabaseFetchResult {
+                            data: DatabaseData(Vec::new()),
+                            fetch_start,
+                            trigger_query_took_message: false,
+                        }))
+                        .unwrap();
                     log_error!(event_sender, Some(err));
                 }
             };
@@ -187,24 +196,26 @@ impl ScrollableTableComponent {
         // TODO: We should keep order of the fields between refteches
         self.calculate_cell_widths();
 
-        let cloned_sender = self.info.event_sender.clone();
-        self.info
-            .event_sender
-            .send(Event::OnAsyncEvent(tokio::spawn(async move {
-                cloned_sender
-                    .send(Event::OnMessage(Message {
-                        value: format!(
-                            "Query took {} ms",
-                            SystemTime::now()
-                                .duration_since(result.fetch_start)
-                                .unwrap()
-                                .as_millis()
-                        ),
-                        severity: Severity::Info,
-                    }))
-                    .unwrap();
-            })))
-            .unwrap();
+        if result.trigger_query_took_message {
+            let cloned_sender = self.info.event_sender.clone();
+            self.info
+                .event_sender
+                .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                    cloned_sender
+                        .send(Event::OnMessage(Message {
+                            value: format!(
+                                "Query took {} ms",
+                                SystemTime::now()
+                                    .duration_since(result.fetch_start)
+                                    .unwrap()
+                                    .as_millis()
+                            ),
+                            severity: Severity::Info,
+                        }))
+                        .unwrap();
+                })))
+                .unwrap();
+        }
         Ok(())
     }
 

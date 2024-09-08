@@ -83,6 +83,10 @@ impl TryFrom<(String, ParametersExpression)> for Command {
     type Error = InterpreterError;
 
     fn try_from((command, params): (String, ParametersExpression)) -> Result<Self, Self::Error> {
+        DEBUG_FILE.write_log(&format!(
+            "('{}' parsed parameters): {:?}",
+            &command, &params
+        ));
         match command.to_lowercase().as_str() {
             "getindexes" => Ok(Command::GetIndexes(GetIndexesQuery)),
             "find" => {
@@ -94,8 +98,6 @@ impl TryFrom<(String, ParametersExpression)> for Command {
 
                 let filter = params.get_nth_of_type::<ObjectExpression>(0).ok();
                 let projection = params.get_nth_of_type::<ObjectExpression>(1).ok();
-
-                DEBUG_FILE.write_log(&filter);
 
                 let mut opts = FindOptions::default();
                 if let Bson::Document(doc) = to_interpter_error!(to_bson(&projection))? {
