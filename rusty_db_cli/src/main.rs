@@ -11,7 +11,11 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
-use rusty_db_cli::application::App;
+use rusty_db_cli::{
+    application::wait_for_app_initialization, managers::window_manager::WindowManagerBuilder,
+    ui::layouts::get_table_layout,
+};
+use tokio::task;
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +25,16 @@ async fn main() {
     let backend = CrosstermBackend::new(stdout);
     let mut term = Terminal::new(backend).unwrap();
     term.clear();
-    let app = App::new(term).await;
+
+    let app = wait_for_app_initialization(
+        task::spawn(async {
+            WindowManagerBuilder::new()
+                .with_window(get_table_layout().await)
+                .build()
+        }),
+        term,
+    )
+    .await;
 
     loop {
         let mut handle = app.lock().unwrap();

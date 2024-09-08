@@ -2,20 +2,17 @@ use std::{
     fmt::Display,
     io::Stdout,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use crossterm::event;
 use ratatui::{backend::CrosstermBackend, Terminal};
+use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{
-    managers::{
-        event_manager::Event,
-        window_manager::{WindowManager, WindowManagerBuilder},
-    },
-    ui::{
-        layouts::get_table_layout,
-        window::{OnInputInfo, WindowRenderInfo},
-    },
+    managers::{event_manager::Event, window_manager::WindowManager},
+    ui::window::{OnInputInfo, WindowRenderInfo},
+    widgets::throbber::{get_throbber_data, Throbber},
 };
 
 #[derive(Clone, Copy)]
@@ -32,15 +29,15 @@ pub struct App {
     window_manager: WindowManager,
 }
 
+type TerminalTyped = Terminal<CrosstermBackend<Stdout>>;
+
 impl App {
-    pub async fn new(terminal: Terminal<CrosstermBackend<Stdout>>) -> Arc<Mutex<Self>> {
+    pub fn new(terminal: TerminalTyped, window_manager: WindowManager) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             should_exit: false,
             mode: Mode::View,
             logs: Vec::new(),
-            window_manager: WindowManagerBuilder::new()
-                .with_window(get_table_layout().await)
-                .build(),
+            window_manager,
             terminal: Arc::new(Mutex::new(terminal)),
         }))
     }
@@ -120,4 +117,30 @@ macro_rules! log_error {
                 .unwrap();
         }
     };
+}
+
+type ArcApp = Arc<Mutex<App>>;
+
+pub async fn wait_for_app_initialization(
+    mut future: JoinHandle<WindowManager>,
+    mut terminal: TerminalTyped,
+) -> ArcApp {
+    let (steps, mut state) = get_throbber_data();
+    loop {
+        tokio::select! {
+            res  = &mut future => {
+                let window_manager = res.unwrap();
+
+                return App::new(terminal, window_manager)
+            }
+            _ = sleep(Duration::from_millis(10)) => {
+
+        terminal
+            .draw(|f| {
+                f.render_stateful_widget(Throbber::new(steps.clone(), Some("Establishing connection with the database...".to_string())), f.size(), &mut state);
+            })
+            .unwrap();
+                }
+        }
+    }
 }

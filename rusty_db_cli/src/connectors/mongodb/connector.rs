@@ -709,7 +709,7 @@ impl Connector for MongodbConnector {
 
     async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
         let mut client_opts = ClientOptions::parse(uri.clone()).await?;
-        client_opts.server_selection_timeout = Some(Duration::from_secs(5));
+        client_opts.server_selection_timeout = Some(Duration::from_secs(3));
         let client = Client::with_options(client_opts.clone())?;
         client
             .database("admin")

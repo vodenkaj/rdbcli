@@ -2,8 +2,7 @@ use std::{cmp, collections::HashSet, fs::File, io::Read, sync::Arc, time::System
 
 use anyhow::Result;
 use crossterm::event;
-use rand::Rng;
-use ratatui::{layout::Constraint, widgets::Paragraph};
+use ratatui::layout::Constraint;
 use rusty_db_cli_mongo::interpreter::InterpreterError;
 use tokio::sync::Mutex;
 
@@ -20,7 +19,10 @@ use crate::{
     try_from,
     types::{HorizontalDirection, VerticalDirection},
     utils::external_editor::{FileType, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
-    widgets::scrollable_table::{Row, ScrollableTable, ScrollableTableState},
+    widgets::{
+        scrollable_table::{Row, ScrollableTable, ScrollableTableState},
+        throbber::{get_throbber_data, Throbber, ThrobberState},
+    },
 };
 
 pub struct ScrollableTableComponent {
@@ -35,6 +37,8 @@ pub struct ScrollableTableComponent {
     horizontal_offset_max: i32,
     vertical_offset_max: i32,
     pagination: PaginationInfo,
+    loader_state: ThrobberState,
+    loader_steps: Vec<String>,
 }
 
 impl ScrollableTableComponent {
@@ -49,6 +53,9 @@ impl ScrollableTableComponent {
         handle
             .read_to_string(&mut query)
             .expect("Failed to read query file");
+
+        let (throbber_steps, throbber_state) = get_throbber_data();
+
         Self {
             is_fetching: false,
             query,
@@ -64,6 +71,8 @@ impl ScrollableTableComponent {
                 start: 0,
                 limit: LIMIT,
             },
+            loader_state: throbber_state,
+            loader_steps: throbber_steps,
         }
     }
 
@@ -253,13 +262,11 @@ impl Component for ScrollableTableComponent {
     fn draw(&mut self, info: ComponentDrawInfo) {
         match self.is_fetching {
             true => {
-                let random_state: String = (0..rand::thread_rng().gen_range(0..3))
-                    .map(|_| ".")
-                    .collect();
-                info.frame.render_widget(
-                    Paragraph::new(format!("Quering{}", random_state)),
+                info.frame.render_stateful_widget(
+                    Throbber::new(self.loader_steps.clone(), Some("Querying...".to_string())),
                     info.area,
-                )
+                    &mut self.loader_state,
+                );
             }
             false => {
                 info.frame.render_stateful_widget(
