@@ -12,13 +12,16 @@ use crossterm::{
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::{
-    application::wait_for_app_initialization, managers::window_manager::WindowManagerBuilder,
-    ui::layouts::get_table_layout,
+    application::wait_for_app_initialization,
+    managers::window_manager::WindowManagerBuilder,
+    ui::layouts::{get_table_layout, CLI_ARGS},
 };
 use tokio::task;
 
 #[tokio::main]
 async fn main() {
+    CLI_ARGS.debug;
+
     enable_raw_mode().unwrap();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
