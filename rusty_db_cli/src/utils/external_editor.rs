@@ -3,7 +3,6 @@ use std::{
     fmt::Debug,
     fs::{create_dir, File, OpenOptions},
     io::{Read, Write},
-    os::unix::prelude::FileExt,
     path::{self, Path, PathBuf},
     process::Command,
 };
@@ -42,7 +41,7 @@ impl ExternalEditor {
             .suffix(file_type.get_ext())
             .tempfile()?;
         let mut handle = file.reopen()?;
-        handle.write_all_at(value.as_bytes(), 0)?;
+        handle.write_all(value.as_bytes())?;
         Command::new(&self.editor)
             .current_dir(".")
             .arg(file.path())
