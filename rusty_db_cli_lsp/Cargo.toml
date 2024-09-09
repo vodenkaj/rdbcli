@@ -2,6 +2,7 @@
 name = "rusty_db_cli_lsp"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [library]
 path = "src/main.rs"         # Path to your library's main source file

@@ -1,4 +1,4 @@
-use std::{fs::File, io::Write, os::unix::fs::FileExt, time::Duration};
+use std::{fs::File, io::Write, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -62,7 +62,7 @@ impl MongodbConnectorBuilder {
             .fold(String::new(), |acc, name| acc + name + "\n");
 
         let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
-        file.write_all_at(collections.as_bytes(), 0)?;
+        file.write_all(collections.as_bytes())?;
         file.flush()?;
 
         Ok(MongodbConnector {
@@ -689,7 +689,7 @@ impl Connector for MongodbConnector {
             .fold(String::new(), |acc, name| acc + name + "\n");
 
         let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string())?;
-        file.write_all_at(collections.as_bytes(), 0)?;
+        file.write_all(collections.as_bytes())?;
         file.flush()?;
 
         Ok(())
@@ -737,7 +737,7 @@ impl Connector for MongodbConnector {
             .fold(String::new(), |acc, name| acc + name + "\n");
 
         let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
-        file.write_all_at(collections.as_bytes(), 0)?;
+        file.write_all(collections.as_bytes())?;
         file.flush()?;
 
         //self.client.shutdown().await; -- may be needed?
