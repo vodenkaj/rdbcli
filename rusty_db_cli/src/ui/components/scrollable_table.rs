@@ -146,7 +146,8 @@ impl ScrollableTableComponent {
         match dir {
             VerticalDirection::Down => {
                 if self.vertical_offset == 0 {
-                    self.vertical_offset = 2;
+                    self.vertical_offset =
+                        cmp::min(self.vertical_offset + 2, self.vertical_offset_max)
                 } else {
                     self.vertical_offset =
                         cmp::min(self.vertical_offset + 1, self.vertical_offset_max);
