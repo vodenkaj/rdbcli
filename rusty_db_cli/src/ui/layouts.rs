@@ -62,6 +62,7 @@ pub async fn get_table_layout() -> Window {
         },
         id: 2,
         event_sender: event_manager.sender.clone(),
+        is_focused: false,
     });
 
     let table = ScrollableTableComponent::new(
@@ -72,6 +73,7 @@ pub async fn get_table_layout() -> Window {
             id: 0,
             visible: true,
             event_sender: event_manager.sender.clone(),
+            is_focused: true,
         },
         ScrollableTableState::default(),
         Arc::new(tokio::sync::Mutex::new(connector)),
@@ -84,6 +86,7 @@ pub async fn get_table_layout() -> Window {
         data: Message::default(),
         id: 1,
         event_sender: event_manager.sender.clone(),
+        is_focused: false,
     });
 
     WindowBuilder::new()

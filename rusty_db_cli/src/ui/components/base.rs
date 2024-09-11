@@ -14,6 +14,7 @@ pub struct ComponentCreateInfo<T> {
     pub focusable: bool,
     pub visible: bool,
     pub event_sender: Sender<Event>,
+    pub is_focused: bool,
 }
 
 pub trait Component: EventHandler + Send {
