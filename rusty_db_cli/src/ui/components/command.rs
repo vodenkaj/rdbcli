@@ -92,9 +92,19 @@ impl Component for CommandComponent {
         }
 
         info.frame.render_widget(
-            Paragraph::new(self.info.data.value.clone()).style(style),
+            Paragraph::new(self.get_text_to_render()).style(style),
             info.area,
         );
+    }
+}
+
+impl CommandComponent {
+    fn get_text_to_render(&self) -> String {
+        if self.info.is_focused {
+            return format!(":{}█", self.info.data.value);
+        }
+
+        self.info.data.value.clone()
     }
 }
 
@@ -105,128 +115,130 @@ impl EventHandler for CommandComponent {
     fn on_event(&mut self, event: &Event) -> Result<()> {
         match event {
             Event::OnMessage(value) => self.info.data = value.clone(),
-            Event::OnInput(value) => {
-                if matches!(value.mode, crate::application::Mode::Input) {
-                    if !matches!(self.info.data.severity, Severity::Normal) {
+            Event::OnInput(value) => match value.mode {
+                crate::application::Mode::View => {
+                    if let event::KeyCode::Char(':') = value.key.code {
+                        self.info.is_focused = true;
                         self.info.data = Message::default();
                         self.history_index = 0;
                     }
-
-                    match value.key.code {
-                        event::KeyCode::Esc => {
-                            self.info.data = Message::default();
+                }
+                crate::application::Mode::Input => match value.key.code {
+                    event::KeyCode::Esc => {
+                        self.info.data = Message::default();
+                        self.history_index = 0;
+                        self.info.is_focused = false;
+                    }
+                    event::KeyCode::Char(value) => {
+                        self.info.data.value += &value.to_string();
+                        self.history_index = -1;
+                    }
+                    event::KeyCode::Backspace => {
+                        self.info.data.value.pop();
+                        self.history_index = -1;
+                    }
+                    event::KeyCode::Up => {
+                        if self.history_index == -1 {
+                            self.refresh_history_filtered();
                             self.history_index = 0;
                         }
-                        event::KeyCode::Char(value) => {
-                            self.info.data.value += &value.to_string();
-                            self.history_index = -1;
+
+                        if let Some(history) =
+                            self.history_filtered.get(self.history_index as usize)
+                        {
+                            self.info.data.value.clone_from(history);
+                            self.history_index += 1;
                         }
-                        event::KeyCode::Backspace => {
-                            self.info.data.value.pop();
-                            self.history_index = -1;
+                    }
+                    event::KeyCode::Down => {
+                        if self.history_index == -1 {
+                            self.refresh_history_filtered();
+                            self.history_index = 0;
                         }
-                        event::KeyCode::Up => {
-                            if self.history_index == -1 {
-                                self.refresh_history_filtered();
-                                self.history_index = 0;
-                            }
+
+                        if self.history_index != 0 {
+                            self.history_index -= 1;
 
                             if let Some(history) =
                                 self.history_filtered.get(self.history_index as usize)
                             {
                                 self.info.data.value.clone_from(history);
-                                self.history_index += 1;
                             }
                         }
-                        event::KeyCode::Down => {
-                            if self.history_index == -1 {
-                                self.refresh_history_filtered();
-                                self.history_index = 0;
-                            }
-
-                            if self.history_index != 0 {
-                                self.history_index -= 1;
-
-                                if let Some(history) =
-                                    self.history_filtered.get(self.history_index as usize)
-                                {
-                                    self.info.data.value.clone_from(history);
-                                }
-                            }
-                        }
-                        event::KeyCode::Enter => {
-                            self.history_index = -1;
-                            let (command, arg0) = Regex::new(COMMAND_REGEX)?
-                                .captures(&self.info.data.value)
-                                .map(|m| {
-                                    let command = m
-                                        .get(1)
-                                        .with_context(|| "First argument of command is missing")?
-                                        .as_str();
-
-                                    let arg0 = m
-                                        .get(5)
-                                        .map(|r| r.as_str().to_string())
-                                        .or_else(|| {
-                                            let command = m.get(4)?;
-                                            let arg = Command::new("zsh")
-                                                .arg("-ci")
-                                                .arg(command.as_str())
-                                                .output()
-                                                .ok()?;
-
-                                            Some(
-                                                std::str::from_utf8(&arg.stdout)
-                                                    .ok()?
-                                                    .trim()
-                                                    .to_string(),
-                                            )
-                                        })
-                                        .with_context(|| "Argument of command is missing")?;
-
-                                    anyhow::Ok((command, arg0))
-                                })
-                                .with_context(|| "Invalid command")??;
-
-                            let issued_command = self.info.data.value.clone();
-
-                            if !CLI_ARGS.disable_command_history {
-                                thread::spawn(move || {
-                                    let mut handle = OpenOptions::new()
-                                        .append(true)
-                                        .open(HISTORY_FILE.to_string())
-                                        .unwrap();
-                                    handle
-                                        .write_all(format!("{}\n", issued_command).as_bytes())
-                                        .unwrap();
-                                });
-                            }
-
-                            match command {
-                                "use" => {
-                                    self.info.event_sender.send(Event::OnConnection(
-                                        ConnectionEvent::SwitchDatabase(arg0.to_string()),
-                                    ))?;
-                                    self.info.data.value = String::new();
-                                }
-                                "connect" => {
-                                    self.info.event_sender.send(Event::OnConnection(
-                                        ConnectionEvent::Connect(arg0.to_string()),
-                                    ))?;
-                                    self.info.data.value = String::new();
-                                }
-                                _ => {
-                                    self.info.data = Message {
-                                        value: String::from("Command not found"),
-                                        severity: Severity::Error,
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
                     }
-                }
-            }
+                    event::KeyCode::Enter => {
+                        self.info.is_focused = false;
+                        self.history_index = -1;
+                        let (command, arg0) = Regex::new(COMMAND_REGEX)?
+                            .captures(&self.info.data.value)
+                            .map(|m| {
+                                let command = m
+                                    .get(1)
+                                    .with_context(|| "First argument of command is missing")?
+                                    .as_str();
+
+                                let arg0 = m
+                                    .get(5)
+                                    .map(|r| r.as_str().to_string())
+                                    .or_else(|| {
+                                        let command = m.get(4)?;
+                                        let arg = Command::new("zsh")
+                                            .arg("-ci")
+                                            .arg(command.as_str())
+                                            .output()
+                                            .ok()?;
+
+                                        Some(
+                                            std::str::from_utf8(&arg.stdout)
+                                                .ok()?
+                                                .trim()
+                                                .to_string(),
+                                        )
+                                    })
+                                    .with_context(|| "Argument of command is missing")?;
+
+                                anyhow::Ok((command, arg0))
+                            })
+                            .with_context(|| "Invalid command")??;
+
+                        let issued_command = self.info.data.value.clone();
+
+                        if !CLI_ARGS.disable_command_history {
+                            thread::spawn(move || {
+                                let mut handle = OpenOptions::new()
+                                    .append(true)
+                                    .open(HISTORY_FILE.to_string())
+                                    .unwrap();
+                                handle
+                                    .write_all(format!("{}\n", issued_command).as_bytes())
+                                    .unwrap();
+                            });
+                        }
+
+                        match command {
+                            "use" => {
+                                self.info.event_sender.send(Event::OnConnection(
+                                    ConnectionEvent::SwitchDatabase(arg0.to_string()),
+                                ))?;
+                                self.info.data.value = String::new();
+                            }
+                            "connect" => {
+                                self.info.event_sender.send(Event::OnConnection(
+                                    ConnectionEvent::Connect(arg0.to_string()),
+                                ))?;
+                                self.info.data.value = String::new();
+                            }
+                            _ => {
+                                self.info.data = Message {
+                                    value: String::from("Command not found"),
+                                    severity: Severity::Error,
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+            },
             _ => {}
         }
         Ok(())
