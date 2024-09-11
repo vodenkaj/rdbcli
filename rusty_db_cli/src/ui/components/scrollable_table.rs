@@ -381,6 +381,7 @@ impl EventHandler for ScrollableTableComponent {
                             let original_query = self.query.clone();
                             self.query = EXTERNAL_EDITOR.edit_file(&MONGO_QUERY_FILE).unwrap();
                             if original_query == self.query {
+                                value.terminal.lock().unwrap().clear()?;
                                 return Ok(());
                             }
                             self.reset_state();
