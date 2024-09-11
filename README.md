@@ -13,7 +13,7 @@
 ## Installation
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vodenkaj/rdbcli/releases/download/v0.1.1/rusty-db-cli-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/vodenkaj/rdbcli/releases/download/v0.1.2/rusty-db-cli-installer.sh | sh
 ```
 
 ## Usage
