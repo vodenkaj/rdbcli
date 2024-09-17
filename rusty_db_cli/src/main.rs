@@ -27,9 +27,9 @@ async fn main() {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
     let backend = CrosstermBackend::new(stdout);
     let mut term = Terminal::new(backend).unwrap();
-    term.clear();
+    term.clear().unwrap();
 
-    let app = wait_for_app_initialization(
+    let Some(app) = wait_for_app_initialization(
         task::spawn(async {
             WindowManagerBuilder::new()
                 .with_window(get_table_layout().await)
@@ -37,7 +37,10 @@ async fn main() {
         }),
         term,
     )
-    .await;
+    .await
+    else {
+        return;
+    };
 
     loop {
         let mut handle = app.lock().unwrap();

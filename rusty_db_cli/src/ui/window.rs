@@ -60,7 +60,7 @@ impl WindowBuilder {
     }
 
     pub fn build(self, event_manager: EventManager) -> Window {
-        if self.components.len() <= 0 {
+        if self.components.is_empty() {
             panic!("Cannot build window without any component");
         }
 
@@ -70,6 +70,7 @@ impl WindowBuilder {
             components: self.components,
             focused_component_idx: 0,
             keybinds: self.keybinds,
+            should_quit: false,
         }
     }
 }
@@ -80,6 +81,7 @@ pub struct Window {
     components: Vec<Box<dyn Component>>,
     pub focused_component_idx: usize,
     keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Self) + Send + Sync>>,
+    pub should_quit: bool,
 }
 
 impl Window {
@@ -92,7 +94,14 @@ impl Window {
     }
 
     pub fn render(&mut self, info: WindowRenderInfo) {
-        self.event_manager.pool(&mut self.components);
+        match self.event_manager.pool(&mut self.components) {
+            Ok(should_quit) => {
+                self.should_quit = should_quit;
+            }
+            Err(err) => {
+                log_error!(self.event_manager.sender, Some(err))
+            }
+        }
 
         info.terminal
             .lock()
@@ -124,8 +133,13 @@ impl Window {
 
     pub fn on_key(&mut self, event: Event) {
         self.event_manager.sender.send(event).unwrap();
-        if let Some(err) = self.event_manager.pool(&mut self.components).err() {
-            log_error!(self.event_manager.sender, Some(err))
+        match self.event_manager.pool(&mut self.components) {
+            Ok(should_quit) => {
+                self.should_quit = should_quit;
+            }
+            Err(err) => {
+                log_error!(self.event_manager.sender, Some(err))
+            }
         }
     }
 }

@@ -34,6 +34,7 @@ pub enum Event {
     OnWindowCommand(WindowCommand),
     OnConnection(ConnectionEvent),
     OnAsyncEvent(JoinHandle<()>),
+    OnQuit(),
 }
 
 #[derive(Eq, Hash, PartialEq, Debug)]
@@ -46,6 +47,7 @@ pub enum EventType {
     OnConnection,
     OnMessage,
     AsyncEvent,
+    OnQuit,
 }
 
 impl Event {
@@ -58,6 +60,7 @@ impl Event {
             Event::OnConnection(_) => EventType::OnConnection,
             Event::OnMessage(_) => EventType::OnMessage,
             Event::OnAsyncEvent(_) => EventType::AsyncEvent,
+            Event::OnQuit() => EventType::OnQuit,
         }
     }
 }
@@ -113,14 +116,19 @@ impl EventManager {
         }
     }
 
-    pub fn pool(&mut self, handlers: &mut Vec<Box<dyn Component>>) -> Result<()> {
+    pub fn pool(&mut self, handlers: &mut Vec<Box<dyn Component>>) -> Result<bool> {
+        let mut should_quit = false;
         while let Ok(event) = self.receiver.try_recv() {
             for handler in handlers.iter_mut() {
                 handler.on_event(&event)?
             }
+
+            if let Event::OnQuit() = event {
+                should_quit = true;
+            }
         }
 
-        Ok(())
+        Ok(should_quit)
     }
 
     pub fn trigger(&self, event: JoinHandle<()>) {

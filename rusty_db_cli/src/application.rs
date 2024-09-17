@@ -5,7 +5,11 @@ use std::{
     time::Duration,
 };
 
-use crossterm::event;
+use crossterm::{
+    event::{self, DisableMouseCapture},
+    execute,
+    terminal::{disable_raw_mode, LeaveAlternateScreen},
+};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::{task::JoinHandle, time::sleep};
 
@@ -76,24 +80,24 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: event::KeyEvent) {
-        self.window_manager
-            .get_focused_window()
-            .on_key(Event::OnInput(OnInputInfo {
-                terminal: self.terminal.clone(),
-                mode: self.mode,
-                key,
-            }));
+        let focused_window = self.window_manager.get_focused_window();
+
+        focused_window.on_key(Event::OnInput(OnInputInfo {
+            terminal: self.terminal.clone(),
+            mode: self.mode,
+            key,
+        }));
+
+        if focused_window.should_quit {
+            self.should_exit = true;
+        }
 
         match self.mode {
-            Mode::View => match key.code {
-                event::KeyCode::Char('q') => {
-                    self.should_exit = true;
-                }
-                event::KeyCode::Char(':') => {
+            Mode::View => {
+                if let event::KeyCode::Char(':') = key.code {
                     self.set_mode(Mode::Input);
                 }
-                _ => {}
-            },
+            }
             Mode::Input => match key.code {
                 event::KeyCode::Enter => {
                     self.set_mode(Mode::View);
@@ -124,16 +128,33 @@ type ArcApp = Arc<Mutex<App>>;
 pub async fn wait_for_app_initialization(
     mut future: JoinHandle<WindowManager>,
     mut terminal: TerminalTyped,
-) -> ArcApp {
+) -> Option<ArcApp> {
     let (steps, mut state) = get_throbber_data();
     loop {
         tokio::select! {
             res  = &mut future => {
                 let window_manager = res.unwrap();
 
-                return App::new(terminal, window_manager)
+                return Some(App::new(terminal, window_manager))
             }
             _ = sleep(Duration::from_millis(10)) => {
+
+        if event::poll(Duration::from_secs(0)).unwrap() {
+            if let event::Event::Key(key) = event::read().unwrap() {
+                if let event::KeyCode::Char('q')  = key.code {
+
+                    disable_raw_mode().unwrap();
+                    execute!(
+                        terminal.backend_mut(),
+                        LeaveAlternateScreen,
+                        DisableMouseCapture
+                    )
+                    .unwrap();
+
+                    return None;
+                }
+            }
+        }
 
         terminal
             .draw(|f| {
