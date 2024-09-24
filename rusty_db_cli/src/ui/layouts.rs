@@ -17,6 +17,7 @@ use crate::{
     connectors::{
         base::{Connector, TableData},
         mongodb::connector::MongodbConnectorBuilder,
+        postgresql::connector::PostgresqlConnectorBuilder,
     },
     managers::event_manager::EventManager,
     widgets::scrollable_table::ScrollableTableState,
@@ -43,14 +44,23 @@ pub static CLI_ARGS: Lazy<CliArgs> = Lazy::new(CliArgs::parse);
 pub async fn get_table_layout() -> Window {
     let event_manager = EventManager::new();
 
-    let connector = if CLI_ARGS.database_uri.contains("mongodb") {
-        MongodbConnectorBuilder::new(&CLI_ARGS.database_uri)
-            .build()
-            .await
+    let connector: Box<dyn Connector> = if CLI_ARGS.database_uri.contains("mongodb") {
+        Box::new(
+            MongodbConnectorBuilder::new(&CLI_ARGS.database_uri)
+                .build()
+                .await
+                .unwrap(),
+        )
+    } else if CLI_ARGS.database_uri.contains("postgresql") {
+        Box::new(
+            PostgresqlConnectorBuilder::new(&CLI_ARGS.database_uri)
+                .build()
+                .await
+                .unwrap(),
+        )
     } else {
         panic!("Other connectors are not implemented");
-    }
-    .expect("Failed to create DB connector");
+    };
 
     let status_line = StatusLineComponent::new(ComponentCreateInfo {
         focusable: true,
@@ -58,7 +68,7 @@ pub async fn get_table_layout() -> Window {
         constraint: Constraint::Length(1),
         data: StatusLineData {
             host: connector.get_info().host.clone(),
-            database_name: connector.database.clone(),
+            database_name: connector.get_info().database.clone(),
         },
         id: 2,
         event_sender: event_manager.sender.clone(),

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
+    str::FromStr,
     time::SystemTime,
     vec::IntoIter,
 };
@@ -14,6 +15,8 @@ use mongodb::{
 };
 use rusty_db_cli_derive_internals::TryFrom;
 use rusty_db_cli_mongo::types::literals::Number;
+use serde_json::Value;
+use tokio_postgres::types::Type;
 
 use crate::widgets::scrollable_table::Row;
 
@@ -119,6 +122,64 @@ impl From<Object> for serde_json::Value {
     }
 }
 
+impl From<tokio_postgres::SimpleQueryMessage> for Object {
+    fn from(value: tokio_postgres::SimpleQueryMessage) -> Self {
+        match value {
+            tokio_postgres::SimpleQueryMessage::Row(row) => Object(
+                HashMap::<String, DatabaseValue>::from_iter(row.columns().iter().map(|col| {
+                    let column_name = col.name();
+
+                    let value = row.get(column_name).unwrap_or("");
+
+                    (
+                        column_name.to_string(),
+                        DatabaseValue::String(value.to_string()),
+                    )
+                })),
+            ),
+            tokio_postgres::SimpleQueryMessage::CommandComplete(_) => Object::new(),
+            tokio_postgres::SimpleQueryMessage::RowDescription(row) => Object::new(),
+            _ => todo!(),
+        }
+    }
+}
+type RowWithSimpleRow = (tokio_postgres::Row, tokio_postgres::SimpleQueryRow);
+
+impl From<RowWithSimpleRow> for Object {
+    fn from((row, simple_row): RowWithSimpleRow) -> Self {
+        Object(HashMap::<String, DatabaseValue>::from_iter(
+            row.columns().iter().map(|col| {
+                let column_name = col.name();
+                let column_type = col.type_();
+
+                let value = match *column_type {
+                    Type::BOOL => row.get::<_, Option<bool>>(column_name).into(),
+                    Type::INT2 => row.get::<_, Option<i64>>(column_name).into(),
+                    Type::INT4 => row.get::<_, Option<i32>>(column_name).into(),
+                    Type::INT8 => row.get::<_, Option<i64>>(column_name).into(),
+                    Type::FLOAT4 => row.get::<_, Option<f32>>(column_name).into(),
+                    Type::FLOAT8 => row.get::<_, Option<f64>>(column_name).into(),
+                    Type::TEXT | Type::VARCHAR => row.get::<_, Option<String>>(column_name).into(),
+                    Type::TIMESTAMP | Type::TIMESTAMPTZ => row
+                        .get::<_, Option<chrono::NaiveDateTime>>(column_name)
+                        .and_then(|v| v.to_string().into())
+                        .into(),
+                    //Type::JSON | Type::JSONB => row.get::<_, Value>(column_name),  // Directly handle JSON columns
+                    _ => serde_json::Value::String(
+                        if let Ok(Some(string)) = row.try_get::<_, Option<String>>(column_name) {
+                            string.into()
+                        } else {
+                            simple_row.get(col.name()).unwrap_or("null").into()
+                        },
+                    ),
+                };
+
+                (column_name.to_string(), DatabaseValue::from(value))
+            }),
+        ))
+    }
+}
+
 impl IntoIterator for Object {
     type Item = (String, DatabaseValue);
     type IntoIter = std::collections::hash_map::IntoIter<String, DatabaseValue>;
@@ -203,6 +264,23 @@ impl From<DatabaseValue> for serde_json::Value {
             }
             DatabaseValue::Index(index) => {
                 todo!();
+            }
+        }
+    }
+}
+
+impl From<serde_json::Value> for DatabaseValue {
+    fn from(val: serde_json::Value) -> DatabaseValue {
+        match val {
+            Value::Null => DatabaseValue::Null,
+            Value::Bool(bool) => DatabaseValue::Bool(bool),
+            Value::Number(number) => {
+                DatabaseValue::Number(Number::from_str(&number.to_string()).unwrap())
+            }
+            Value::String(str) => DatabaseValue::String(str),
+            Value::Array(arr) => DatabaseValue::Array(arr.into_iter().map(|v| v.into()).collect()),
+            Value::Object(_) => {
+                todo!()
             }
         }
     }

@@ -31,7 +31,7 @@ pub struct ScrollableTableComponent {
     is_fetching: bool,
     state: ScrollableTableState,
     query: String,
-    connector: Arc<Mutex<dyn Connector>>,
+    connector: Arc<Mutex<Box<dyn Connector>>>,
     horizontal_offset: i32,
     vertical_offset: i32,
     horizontal_offset_max: i32,
@@ -45,7 +45,7 @@ impl ScrollableTableComponent {
     pub fn new(
         info: ComponentCreateInfo<TableData<'static>>,
         state: ScrollableTableState,
-        conn: Arc<Mutex<dyn Connector>>,
+        conn: Arc<Mutex<Box<dyn Connector>>>,
     ) -> Self {
         let mut handle =
             File::open(MONGO_QUERY_FILE.to_string()).expect("Failed to read query file");
@@ -82,7 +82,7 @@ impl ScrollableTableComponent {
         self.vertical_offset = 0;
     }
 
-    pub fn set_connector(&mut self, conn: Arc<Mutex<dyn Connector>>) {
+    pub fn set_connector(&mut self, conn: Arc<Mutex<Box<dyn Connector>>>) {
         // TODO: This is ugly, the get_table_layout fn should instead accept builder struct
         self.connector = conn;
     }
