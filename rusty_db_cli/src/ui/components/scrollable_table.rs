@@ -1,10 +1,9 @@
-use std::{cmp, collections::HashSet, fs::File, io::Read, sync::Arc, time::SystemTime};
+use std::{cmp, collections::HashSet, fs::File, io::Read, time::SystemTime};
 
 use anyhow::Result;
 use crossterm::event;
 use ratatui::layout::Constraint;
 use rusty_db_cli_mongo::interpreter::InterpreterError;
-use tokio::sync::Mutex;
 
 use super::{
     base::{Component, ComponentCreateInfo, ComponentDrawInfo},
@@ -12,13 +11,13 @@ use super::{
 };
 use crate::{
     connectors::base::{
-        Connector, DatabaseData, DatabaseFetchResult, Object, PaginationInfo, TableData, LIMIT,
+        ConnectorInfo, DatabaseData, DatabaseFetchResult, Object, PaginationInfo, TableData, LIMIT,
     },
     log_error,
-    managers::event_manager::{ConnectionEvent, Event, EventHandler},
+    managers::event_manager::{ConnectionEvent, Event, EventHandler, QueryEvent},
     try_from,
     types::{HorizontalDirection, VerticalDirection},
-    utils::external_editor::{FileType, DEBUG_FILE, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
+    utils::external_editor::{get_query_file, FileType, EXTERNAL_EDITOR, MONGO_QUERY_FILE},
     widgets::{
         scrollable_table::{Row, ScrollableTable, ScrollableTableState},
         throbber::{get_throbber_data, Throbber, ThrobberState},
@@ -31,7 +30,8 @@ pub struct ScrollableTableComponent {
     is_fetching: bool,
     state: ScrollableTableState,
     query: String,
-    connector: Arc<Mutex<Box<dyn Connector>>>,
+    //connector: Arc<Mutex<Box<dyn Connector>>>,
+    connector_info: Option<ConnectorInfo>,
     horizontal_offset: i32,
     vertical_offset: i32,
     horizontal_offset_max: i32,
@@ -45,7 +45,7 @@ impl ScrollableTableComponent {
     pub fn new(
         info: ComponentCreateInfo<TableData<'static>>,
         state: ScrollableTableState,
-        conn: Arc<Mutex<Box<dyn Connector>>>,
+        //conn: Arc<Mutex<Box<dyn Connector>>>,
     ) -> Self {
         let mut handle =
             File::open(MONGO_QUERY_FILE.to_string()).expect("Failed to read query file");
@@ -62,7 +62,7 @@ impl ScrollableTableComponent {
             data: DatabaseData(Vec::new()),
             info,
             state,
-            connector: conn,
+            //connector: conn,
             horizontal_offset: 0,
             vertical_offset: 0,
             horizontal_offset_max: 0,
@@ -71,6 +71,7 @@ impl ScrollableTableComponent {
                 start: 0,
                 limit: LIMIT,
             },
+            connector_info: None,
             loader_state: throbber_state,
             loader_steps: throbber_steps,
         }
@@ -80,11 +81,6 @@ impl ScrollableTableComponent {
         self.state.reset();
         self.horizontal_offset = 0;
         self.vertical_offset = 0;
-    }
-
-    pub fn set_connector(&mut self, conn: Arc<Mutex<Box<dyn Connector>>>) {
-        // TODO: This is ugly, the get_table_layout fn should instead accept builder struct
-        self.connector = conn;
     }
 
     pub fn handle_next_horizontal_movement(&mut self, dir: HorizontalDirection) {
@@ -100,46 +96,6 @@ impl ScrollableTableComponent {
 
         self.state
             .set_horizontal_offset(self.horizontal_offset as usize);
-    }
-
-    pub fn spawn_next_data(&mut self) {
-        let (cloned_conn, cloned_query, cloned_pagination, event_sender) = (
-            self.connector.clone(),
-            self.query.clone(),
-            self.pagination,
-            self.info.event_sender.clone(),
-        );
-        self.is_fetching = true;
-        tokio::spawn(async move {
-            let fetch_start = SystemTime::now();
-            let result = cloned_conn
-                .lock()
-                .await
-                .get_data(cloned_query, cloned_pagination)
-                .await;
-            match result {
-                Ok(data) => {
-                    event_sender
-                        .send(Event::DatabaseData(DatabaseFetchResult {
-                            data,
-                            fetch_start,
-                            trigger_query_took_message: true,
-                        }))
-                        .unwrap();
-                }
-                Err(err) => {
-                    DEBUG_FILE.write_log(&err);
-                    event_sender
-                        .send(Event::DatabaseData(DatabaseFetchResult {
-                            data: DatabaseData(Vec::new()),
-                            fetch_start,
-                            trigger_query_took_message: false,
-                        }))
-                        .unwrap();
-                    log_error!(event_sender, Some(err));
-                }
-            };
-        });
     }
 
     pub fn handle_next_vertical_movement(&mut self, dir: VerticalDirection) {
@@ -173,7 +129,10 @@ impl ScrollableTableComponent {
             self.state.reset();
             self.state
                 .set_horizontal_offset(self.horizontal_offset as usize);
-            self.spawn_next_data();
+            self.info.event_sender.send(Event::OnQuery(QueryEvent {
+                query: self.query.clone(),
+                pagination: self.pagination,
+            }));
         }
         if offset == 1
             && matches!(dir, VerticalDirection::Up)
@@ -185,7 +144,10 @@ impl ScrollableTableComponent {
                 .set_vertical_offset((self.vertical_offset - 10) as usize);
             self.state.set_vertical_select(10);
             self.pagination.start -= (LIMIT - 1) as u64;
-            self.spawn_next_data();
+            self.info.event_sender.send(Event::OnQuery(QueryEvent {
+                query: self.query.clone(),
+                pagination: self.pagination,
+            }));
         }
     }
 
@@ -262,6 +224,10 @@ impl ScrollableTableComponent {
 }
 
 impl Component for ScrollableTableComponent {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn set_visibility(&mut self, visible: bool) -> bool {
         self.info.visible = visible;
         visible
@@ -299,101 +265,132 @@ impl Component for ScrollableTableComponent {
 }
 
 impl EventHandler for ScrollableTableComponent {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
     fn on_event(&mut self, event: &Event) -> Result<()> {
         match event {
             Event::OnConnection(value) => match value {
-                ConnectionEvent::SwitchDatabase(value) => {
-                    let connector = self.connector.clone();
-                    let cloned_value = value.clone();
-                    let cloned_sender = self.info.event_sender.clone();
-                    let result = self
-                        .info
-                        .event_sender
-                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
-                            match connector.lock().await.set_database(&cloned_value).await {
-                                Ok(_) => {
-                                    cloned_sender
-                                        .send(Event::OnMessage(Message {
-                                            value: format!(
-                                                "Database switched to '{}'",
-                                                &cloned_value
-                                            ),
-                                            severity: Severity::Info,
-                                        }))
-                                        .unwrap();
-                                }
-                                Err(e) => {
-                                    cloned_sender
-                                        .send(Event::OnMessage(Message {
-                                            value: e.to_string(),
-                                            severity: Severity::Error,
-                                        }))
-                                        .unwrap();
-                                }
-                            }
-                        })));
-                    log_error!(self.info.event_sender, result.err());
+                ConnectionEvent::SwitchConnection(info) => {
+                    self.connector_info = Some(info.clone());
                 }
-                ConnectionEvent::Connect(value) => {
-                    let connector = self.connector.clone();
-                    let cloned_value = value.clone();
-                    let cloned_sender = self.info.event_sender.clone();
-                    self.info
-                        .event_sender
-                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
-                            match connector
-                                .lock()
-                                .await
-                                .set_connection(cloned_value.clone())
-                                .await
-                            {
-                                Ok(info) => {
-                                    cloned_sender
-                                        .send(Event::OnMessage(Message {
-                                            value: format!(
-                                                "Connection switched to '{}'",
-                                                &info.host.clone()
-                                            ),
-                                            severity: Severity::Info,
-                                        }))
-                                        .unwrap();
-                                    cloned_sender
-                                        .send(Event::OnConnection(
-                                            ConnectionEvent::SwitchConnection(
-                                                info.host.clone(),
-                                                info.database.clone(),
-                                            ),
-                                        ))
-                                        .unwrap()
-                                }
-                                Err(e) => {
-                                    log_error!(cloned_sender, Some(e));
-                                }
-                            };
-                        })));
-                }
-                _ => (),
+                _ => {}
             },
+            //Event::OnConnection(value) => match value {
+            //    ConnectionEvent::SwitchDatabase(value) => {
+            //        //let connector = self.connector.clone();
+            //        let cloned_value = value.clone();
+            //        let cloned_sender = self.info.event_sender.clone();
+            //        let result = self
+            //            .info
+            //            .event_sender
+            //            .send(Event::OnAsyncEvent(tokio::spawn(async move {
+            //                match connector.lock().await.set_database(&cloned_value).await {
+            //                    Ok(_) => {
+            //                        cloned_sender
+            //                            .send(Event::OnMessage(Message {
+            //                                value: format!(
+            //                                    "Database switched to '{}'",
+            //                                    &cloned_value
+            //                                ),
+            //                                severity: Severity::Info,
+            //                            }))
+            //                            .unwrap();
+            //                    }
+            //                    Err(e) => {
+            //                        cloned_sender
+            //                            .send(Event::OnMessage(Message {
+            //                                value: e.to_string(),
+            //                                severity: Severity::Error,
+            //                            }))
+            //                            .unwrap();
+            //                    }
+            //                }
+            //            })));
+            //        log_error!(self.info.event_sender, result.err());
+            //    }
+            //    ConnectionEvent::Connect(value) => {
+            //        let connector = self.connector.clone();
+            //        let cloned_value = value.clone();
+            //        let cloned_sender = self.info.event_sender.clone();
+            //        self.info
+            //            .event_sender
+            //            .send(Event::OnAsyncEvent(tokio::spawn(async move {
+            //                match connector
+            //                    .lock()
+            //                    .await
+            //                    .set_connection(cloned_value.clone())
+            //                    .await
+            //                {
+            //                    Ok(info) => {
+            //                        cloned_sender
+            //                            .send(Event::OnMessage(Message {
+            //                                value: format!(
+            //                                    "Connection switched to '{}'",
+            //                                    &info.host.clone()
+            //                                ),
+            //                                severity: Severity::Info,
+            //                            }))
+            //                            .unwrap();
+            //                        cloned_sender
+            //                            .send(Event::OnConnection(
+            //                                ConnectionEvent::SwitchConnection(
+            //                                    info.host.clone(),
+            //                                    info.database.clone(),
+            //                                ),
+            //                            ))
+            //                            .unwrap()
+            //                    }
+            //                    Err(e) => {
+            //                        log_error!(cloned_sender, Some(e));
+            //                    }
+            //                };
+            //            })));
+            //    }
+            //    ConnectionEvent::SwitchConnection(host, _) => {
+            //        self.database_kind = if host.contains("mongo") {
+            //            "mongodb".to_string()
+            //        } else {
+            //            "postgresl".to_string()
+            //        }
+            //    }
+            //    _ => (),
+            //},
             Event::OnInput(value) => {
                 if matches!(value.mode, crate::application::Mode::View) {
                     match value.key.code {
                         event::KeyCode::Char('i') => {
+                            if self.connector_info.is_none() {
+                                log_error!(self.info.event_sender, Some("You have to be connected to the database to be able to query!"));
+                                return Ok(());
+                            }
+
+                            let info = self.connector_info.clone().unwrap();
+
                             let original_query = self.query.clone();
-                            self.query = EXTERNAL_EDITOR.edit_file(&MONGO_QUERY_FILE).unwrap();
+                            self.query = EXTERNAL_EDITOR.edit_file(&get_query_file(&info)).unwrap();
                             if original_query == self.query {
                                 value.terminal.lock().unwrap().clear()?;
                                 return Ok(());
                             }
                             self.reset_state();
                             self.pagination.reset();
-                            self.spawn_next_data();
                             value.terminal.lock().unwrap().clear()?;
+                            self.is_fetching = true;
+                            self.info.event_sender.send(Event::OnQuery(QueryEvent {
+                                query: self.query.clone(),
+                                pagination: self.pagination,
+                            }));
                         }
                         event::KeyCode::Char('r') => {
                             self.reset_state();
                             self.pagination.reset();
-                            self.spawn_next_data();
                             value.terminal.lock().unwrap().clear()?;
+                            self.is_fetching = true;
+                            self.info.event_sender.send(Event::OnQuery(QueryEvent {
+                                query: self.query.clone(),
+                                pagination: self.pagination,
+                            }));
                         }
                         event::KeyCode::Left | event::KeyCode::Char('h') => {
                             self.handle_next_horizontal_movement(HorizontalDirection::Left)

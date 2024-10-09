@@ -1,6 +1,11 @@
-use std::{fs::File, io::Write, time::Duration};
+use std::{
+    fs::File,
+    io::Write,
+    sync::{mpsc::Sender, Arc},
+    time::{Duration, SystemTime},
+};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::TimeZone;
 use mongodb::{
@@ -18,13 +23,21 @@ use rusty_db_cli_mongo::{
     },
 };
 use serde_json::Map;
+use tokio::sync::Mutex;
 
 use super::interpreter::InterpreterMongo;
 use crate::{
     connectors::base::{
-        Connector, ConnectorInfo, DatabaseData, DatabaseValue, Object, PaginationInfo,
+        Connector, ConnectorInfo, DatabaseData, DatabaseFetchResult, DatabaseKind, DatabaseValue,
+        Object, PaginationInfo,
+    },
+    log_error,
+    managers::{
+        event_manager::{ConnectionEvent, Event, EventHandler, QueryEvent, ResourceEvent},
+        resource_manager::Resource,
     },
     try_from,
+    ui::components::command::{Message, Severity},
     utils::external_editor::{DEBUG_FILE, MONGO_COLLECTIONS_FILE},
 };
 
@@ -39,6 +52,7 @@ impl MongodbConnectorBuilder {
                 uri: uri.to_string(),
                 host: "unknown".to_string(),
                 database: "unknown".to_string(),
+                kind: DatabaseKind::MongoDB,
             }),
         }
     }
@@ -709,45 +723,46 @@ impl Connector for MongodbConnector {
         }
     }
 
-    async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
-        let mut client_opts = ClientOptions::parse(uri.clone()).await?;
-        client_opts.server_selection_timeout = Some(Duration::from_secs(3));
-        let client = Client::with_options(client_opts.clone())?;
-        client
-            .database("admin")
-            .run_command(doc! {"ping": 1}, None)
-            .await
-            .with_context(|| "Failed to connect to the database")?;
+    //async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
+    //    let mut client_opts = ClientOptions::parse(uri.clone()).await?;
+    //    client_opts.server_selection_timeout = Some(Duration::from_secs(3));
+    //    let client = Client::with_options(client_opts.clone())?;
+    //    client
+    //        .database("admin")
+    //        .run_command(doc! {"ping": 1}, None)
+    //        .await
+    //        .with_context(|| "Failed to connect to the database")?;
 
-        let info = ConnectorInfo {
-            host: client_opts
-                .hosts
-                .first()
-                .map(|host| host.to_string())
-                .unwrap_or("unknown".to_string()),
-            uri,
-            database: client_opts.default_database.unwrap_or("admin".to_string()),
-        };
+    //    let info = ConnectorInfo {
+    //        host: client_opts
+    //            .hosts
+    //            .first()
+    //            .map(|host| host.to_string())
+    //            .unwrap_or("unknown".to_string()),
+    //        uri,
+    //        database: client_opts.default_database.unwrap_or("admin".to_string()),
+    //        kind: self.info.kind.clone(),
+    //    };
 
-        let collections = client
-            .database(&info.database)
-            .list_collection_names(None)
-            .await?
-            .iter()
-            .fold(String::new(), |acc, name| acc + name + "\n");
+    //    let collections = client
+    //        .database(&info.database)
+    //        .list_collection_names(None)
+    //        .await?
+    //        .iter()
+    //        .fold(String::new(), |acc, name| acc + name + "\n");
 
-        let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
-        file.write_all(collections.as_bytes())?;
-        file.flush()?;
+    //    let mut file = File::create(MONGO_COLLECTIONS_FILE.to_string()).unwrap();
+    //    file.write_all(collections.as_bytes())?;
+    //    file.flush()?;
 
-        //self.client.shutdown().await; -- may be needed?
+    //    //self.client.shutdown().await; -- may be needed?
 
-        self.database = info.database.clone();
-        self.info = info;
-        self.client = client;
+    //    self.database = info.database.clone();
+    //    self.info = info;
+    //    self.client = client;
 
-        Ok(self.info.clone())
-    }
+    //    Ok(self.info.clone())
+    //}
 }
 
 impl TryFrom<Document> for DatabaseValue {
@@ -803,5 +818,141 @@ impl TryFrom<Bson> for DatabaseValue {
             Bson::ObjectId(object_id) => Ok(DatabaseValue::ObjectId(object_id)),
             _ => Ok(DatabaseValue::String(value.to_string())),
         }
+    }
+}
+
+pub struct ConnectorResource {
+    pub connector: Option<Arc<Mutex<Box<dyn Connector>>>>,
+    pub event_sender: Sender<Event>,
+}
+
+impl Resource for ConnectorResource {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl ConnectorResource {
+    fn spawn_next_data(&mut self, query_event: QueryEvent) {
+        let (sender, connector) = (self.event_sender.clone(), self.connector.clone());
+        tokio::spawn(async move {
+            let fetch_start = SystemTime::now();
+
+            let result = connector
+                .unwrap()
+                .lock()
+                .await
+                .get_data(query_event.query, query_event.pagination)
+                .await;
+
+            match result {
+                Ok(data) => {
+                    sender
+                        .send(Event::DatabaseData(DatabaseFetchResult {
+                            data,
+                            fetch_start,
+                            trigger_query_took_message: true,
+                        }))
+                        .unwrap();
+                }
+                Err(err) => {
+                    DEBUG_FILE.write_log(&err);
+                    sender
+                        .send(Event::DatabaseData(DatabaseFetchResult {
+                            data: DatabaseData(Vec::new()),
+                            fetch_start,
+                            trigger_query_took_message: false,
+                        }))
+                        .unwrap();
+                    log_error!(sender, Some(err));
+                }
+            };
+        });
+    }
+}
+
+impl EventHandler for ConnectorResource {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
+
+    fn on_event(&mut self, event: &crate::managers::event_manager::Event) -> Result<()> {
+        match event {
+            Event::OnConnection(event) => match event {
+                ConnectionEvent::Connect(value) => {
+                    let connector = self.connector.clone();
+                    let cloned_value = value.clone();
+                    let cloned_sender = self.event_sender.clone();
+                    self.event_sender
+                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                            match connector
+                                .unwrap()
+                                .lock()
+                                .await
+                                .set_connection(cloned_value.clone())
+                                .await
+                            {
+                                Ok(connector) => {
+                                    let info = connector.get_info();
+                                    cloned_sender
+                                        .send(Event::OnMessage(Message {
+                                            value: format!(
+                                                "Connection switched to '{}'",
+                                                &info.host
+                                            ),
+                                            severity: Severity::Info,
+                                        }))
+                                        .unwrap();
+                                    cloned_sender
+                                        .send(Event::OnConnection(
+                                            ConnectionEvent::SwitchConnection(info.clone()),
+                                        ))
+                                        .unwrap();
+
+                                    cloned_sender
+                                        .send(Event::OnResourceEvent(ResourceEvent::Update(
+                                            Box::new(ConnectorResource {
+                                                connector: Some(Arc::new(Mutex::new(connector))),
+                                                event_sender: cloned_sender.clone(),
+                                            }),
+                                        )))
+                                        .unwrap()
+                                }
+                                Err(e) => {
+                                    log_error!(cloned_sender, Some(e));
+                                }
+                            };
+                        })));
+                }
+                ConnectionEvent::SwitchConnection(info) => {}
+                ConnectionEvent::SwitchDatabase(db_name) => {
+                    let (connector, database, sender) = (
+                        self.connector.clone(),
+                        db_name.clone(),
+                        self.event_sender.clone(),
+                    );
+                    self.event_sender
+                        .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                            connector
+                                .unwrap()
+                                .lock()
+                                .await
+                                .set_database(&database)
+                                .await;
+
+                            sender
+                                .send(Event::OnMessage(Message {
+                                    value: format!("Database switched to '{}'", &database),
+                                    severity: Severity::Info,
+                                }))
+                                .unwrap();
+                        })));
+                }
+            },
+            Event::OnQuery(query) => self.spawn_next_data(query.clone()),
+            _ => {}
+        }
+
+        Ok(())
     }
 }

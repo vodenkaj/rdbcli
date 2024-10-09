@@ -1,22 +1,24 @@
-use std::{
-    fmt::Display,
-    io::Stdout,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{fmt::Display, io::Stdout, sync::Arc};
 
-use crossterm::{
-    event::{self, DisableMouseCapture},
-    execute,
-    terminal::{disable_raw_mode, LeaveAlternateScreen},
-};
+use crossterm::event::{self};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use tokio::{task::JoinHandle, time::sleep};
+use tokio::sync::Mutex;
 
 use crate::{
-    managers::{event_manager::Event, window_manager::WindowManager},
-    ui::window::{OnInputInfo, WindowRenderInfo},
-    widgets::throbber::{get_throbber_data, Throbber},
+    connectors::{
+        base::{get_connector, Connector},
+        mongodb::connector::ConnectorResource,
+    },
+    log_error,
+    managers::{
+        event_manager::{ConnectionEvent, Event, EventHandler, EventManager},
+        resource_manager::ResourceManager,
+        window_manager::WindowManager,
+    },
+    ui::{
+        components::command::{Message, Severity},
+        window::{OnInputInfo, WindowRenderInfo},
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -29,20 +31,62 @@ pub struct App {
     pub should_exit: bool,
     pub mode: Mode,
     logs: Vec<String>,
-    pub terminal: Arc<Mutex<Terminal<CrosstermBackend<Stdout>>>>,
+    pub terminal: Arc<std::sync::Mutex<Terminal<CrosstermBackend<Stdout>>>>,
     window_manager: WindowManager,
+    resource_manager: ResourceManager,
+    event_manager: EventManager,
 }
 
 type TerminalTyped = Terminal<CrosstermBackend<Stdout>>;
 
 impl App {
-    pub fn new(terminal: TerminalTyped, window_manager: WindowManager) -> Arc<Mutex<Self>> {
+    pub fn new(
+        terminal: TerminalTyped,
+        window_manager: WindowManager,
+        event_manager: EventManager,
+    ) -> Arc<Mutex<Self>> {
+        let cloned_sender = event_manager.sender.clone();
+
+        let resource_manager = ResourceManager::new();
+
+        event_manager
+            .sender
+            .send(Event::OnAsyncEvent(tokio::spawn(async move {
+                let original_connector = get_connector().await;
+                let info = original_connector.get_info().clone();
+                let connector = Some(Arc::new(Mutex::new(original_connector)));
+
+                cloned_sender.send(Event::OnResourceEvent(
+                    crate::managers::event_manager::ResourceEvent::Add(Box::new(
+                        ConnectorResource {
+                            connector,
+                            event_sender: cloned_sender.clone(),
+                        },
+                    )),
+                ));
+
+                cloned_sender
+                    .send(Event::OnMessage(Message {
+                        value: format!("Connection switched to '{}'", &info.host),
+                        severity: Severity::Info,
+                    }))
+                    .unwrap();
+
+                cloned_sender
+                    .send(Event::OnConnection(ConnectionEvent::SwitchConnection(
+                        info.clone(),
+                    )))
+                    .unwrap();
+            })));
+
         Arc::new(Mutex::new(Self {
             should_exit: false,
             mode: Mode::View,
             logs: Vec::new(),
             window_manager,
-            terminal: Arc::new(Mutex::new(terminal)),
+            terminal: Arc::new(std::sync::Mutex::new(terminal)),
+            resource_manager,
+            event_manager,
         }))
     }
 
@@ -71,26 +115,43 @@ impl App {
     }
 
     pub fn render(&mut self) {
-        self.window_manager
-            .get_focused_window()
-            .render(WindowRenderInfo {
-                terminal: self.terminal.clone(),
-                mode: self.mode,
-            })
+        let focused_window = self.window_manager.get_focused_window();
+
+        focused_window.render(WindowRenderInfo {
+            terminal: self.terminal.clone(),
+            mode: self.mode,
+            event_manager: &mut self.event_manager,
+        });
+    }
+
+    pub fn on_update(&mut self) {
+        let focused_window = self.window_manager.get_focused_window();
+
+        let mut event_handlers: Vec<_> = focused_window
+            .components
+            .iter_mut()
+            .map(|c| Box::new(c.as_mut_event_handler()))
+            .collect();
+
+        match self
+            .event_manager
+            .pool(&mut event_handlers, &mut self.resource_manager)
+        {
+            Ok(should_quit) => {
+                self.should_exit = should_quit;
+            }
+            Err(err) => {
+                log_error!(self.event_manager.sender, Some(err))
+            }
+        }
     }
 
     pub fn on_key(&mut self, key: event::KeyEvent) {
-        let focused_window = self.window_manager.get_focused_window();
-
-        focused_window.on_key(Event::OnInput(OnInputInfo {
+        self.event_manager.sender.send(Event::OnInput(OnInputInfo {
             terminal: self.terminal.clone(),
             mode: self.mode,
             key,
         }));
-
-        if focused_window.should_quit {
-            self.should_exit = true;
-        }
 
         match self.mode {
             Mode::View => {
@@ -121,47 +182,4 @@ macro_rules! log_error {
                 .unwrap();
         }
     };
-}
-
-type ArcApp = Arc<Mutex<App>>;
-
-pub async fn wait_for_app_initialization(
-    mut future: JoinHandle<WindowManager>,
-    mut terminal: TerminalTyped,
-) -> Option<ArcApp> {
-    let (steps, mut state) = get_throbber_data();
-    loop {
-        tokio::select! {
-            res  = &mut future => {
-                let window_manager = res.unwrap();
-
-                return Some(App::new(terminal, window_manager))
-            }
-            _ = sleep(Duration::from_millis(10)) => {
-
-        if event::poll(Duration::from_secs(0)).unwrap() {
-            if let event::Event::Key(key) = event::read().unwrap() {
-                if let event::KeyCode::Char('q')  = key.code {
-
-                    disable_raw_mode().unwrap();
-                    execute!(
-                        terminal.backend_mut(),
-                        LeaveAlternateScreen,
-                        DisableMouseCapture
-                    )
-                    .unwrap();
-
-                    return None;
-                }
-            }
-        }
-
-        terminal
-            .draw(|f| {
-                f.render_stateful_widget(Throbber::new(steps.clone(), Some("Establishing connection with the database...".to_string())), f.size(), &mut state);
-            })
-            .unwrap();
-                }
-        }
-    }
 }

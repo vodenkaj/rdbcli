@@ -18,13 +18,24 @@ use rusty_db_cli_mongo::types::literals::Number;
 use serde_json::Value;
 use tokio_postgres::types::Type;
 
-use crate::widgets::scrollable_table::Row;
+use super::{
+    mongodb::connector::MongodbConnectorBuilder, postgresql::connector::PostgresqlConnectorBuilder,
+};
+use crate::{ui::layouts::CLI_ARGS, widgets::scrollable_table::Row};
+
+#[derive(Debug, Clone)]
+pub enum DatabaseKind {
+    MongoDB,
+    PostgresSQL,
+    Unknown,
+}
 
 #[derive(Debug, Clone)]
 pub struct ConnectorInfo {
     pub uri: String,
     pub host: String,
     pub database: String,
+    pub kind: DatabaseKind,
 }
 
 pub struct TableData<'a> {
@@ -243,7 +254,20 @@ pub trait Connector: Send + Sync {
     fn get_info(&self) -> &ConnectorInfo;
     async fn get_data(&self, query: String, pagination: PaginationInfo) -> Result<DatabaseData>;
     async fn set_database(&mut self, database: &str) -> Result<()>;
-    async fn set_connection(&mut self, uri: String) -> anyhow::Result<ConnectorInfo>;
+
+    async fn set_connection(&mut self, uri: String) -> anyhow::Result<Box<dyn Connector>> {
+        if uri.contains("mongodb") {
+            Ok(Box::new(
+                MongodbConnectorBuilder::new(&uri).build().await.unwrap(),
+            ))
+        } else if uri.contains("postgresql") {
+            Ok(Box::new(
+                PostgresqlConnectorBuilder::new(&uri).build().await.unwrap(),
+            ))
+        } else {
+            panic!("Other connectors are not implemented");
+        }
+    }
 }
 
 impl From<DatabaseValue> for serde_json::Value {
@@ -283,5 +307,25 @@ impl From<serde_json::Value> for DatabaseValue {
                 todo!()
             }
         }
+    }
+}
+
+pub async fn get_connector() -> Box<dyn Connector> {
+    if CLI_ARGS.database_uri.contains("mongodb") {
+        Box::new(
+            MongodbConnectorBuilder::new(&CLI_ARGS.database_uri)
+                .build()
+                .await
+                .unwrap(),
+        )
+    } else if CLI_ARGS.database_uri.contains("postgresql") {
+        Box::new(
+            PostgresqlConnectorBuilder::new(&CLI_ARGS.database_uri)
+                .build()
+                .await
+                .unwrap(),
+        )
+    } else {
+        panic!("Other connectors are not implemented");
     }
 }

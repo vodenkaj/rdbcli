@@ -1,7 +1,7 @@
 use std::{
     env,
     fmt::Debug,
-    fs::{create_dir, File, OpenOptions},
+    fs::{create_dir, create_dir_all, File, OpenOptions},
     io::{Read, Write},
     path::{self, Path, PathBuf},
     process::Command,
@@ -9,7 +9,10 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::ui::layouts::CLI_ARGS;
+use crate::{
+    connectors::base::{ConnectorInfo, DatabaseKind},
+    ui::layouts::CLI_ARGS,
+};
 
 pub struct ExternalEditor {
     editor: String,
@@ -78,11 +81,43 @@ pub static EXTERNAL_EDITOR: Lazy<ExternalEditor> = Lazy::new(|| {
     )
 });
 
+pub fn get_query_file(info: &ConnectorInfo) -> String {
+    let path = match info.kind {
+        DatabaseKind::MongoDB => {
+            Path::new(CONFIG_PATH.as_str()).join(format!(".mongo/{}.js", info.database))
+        }
+        DatabaseKind::PostgresSQL => {
+            Path::new(CONFIG_PATH.as_str()).join(format!(".postgresql/{}.sql", info.database))
+        }
+        DatabaseKind::Unknown => Path::new(MONGO_QUERY_FILE.as_str()).to_path_buf(),
+    };
+
+    if !path.exists() {
+        let prefix = path.parent().unwrap();
+        if !prefix.exists() {
+            create_dir_all(prefix).unwrap();
+        }
+        File::create(path.clone()).expect("Failed to create database file");
+    }
+
+    path.to_str().unwrap().to_string()
+}
+
 pub const MONGO_QUERY_FILE: Lazy<String> = Lazy::new(|| {
     let path = Path::new(CONFIG_PATH.as_str()).join(".mongo.js");
 
     if !path.exists() {
         File::create(path.clone()).expect("Failed to create mongo file");
+    }
+
+    path.to_str().unwrap().to_string()
+});
+
+pub const POSTGRES_QUERY_FILE: Lazy<String> = Lazy::new(|| {
+    let path = Path::new(CONFIG_PATH.as_str()).join(".psql.sql");
+
+    if !path.exists() {
+        File::create(path.clone()).expect("Failed to create psql file");
     }
 
     path.to_str().unwrap().to_string()

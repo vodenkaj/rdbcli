@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use std::{any::Any, sync::mpsc::Sender};
 
 use ratatui::{
     layout::{Constraint, Rect},
@@ -22,12 +22,7 @@ pub trait Component: EventHandler + Send {
     fn is_visible(&self) -> bool;
     fn set_visibility(&mut self, visible: bool) -> bool;
     fn draw(&mut self, info: ComponentDrawInfo);
-    fn as_event_handler(&self) -> &dyn EventHandler
-    where
-        Self: std::marker::Sized,
-    {
-        self
-    }
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 pub struct ComponentDrawInfo<'a, 'b> {

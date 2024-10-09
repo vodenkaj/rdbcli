@@ -24,6 +24,9 @@ impl WindowManager {
 }
 
 impl EventHandler for WindowManager {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
     fn on_event(&mut self, event: &Event) -> Result<()> {
         if let Event::OnWindowCommand(cmd) = &event {
             match cmd {

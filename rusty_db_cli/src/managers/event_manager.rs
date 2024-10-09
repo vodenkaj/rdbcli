@@ -7,33 +7,42 @@ use std::{
 };
 
 use anyhow::Result;
-use mongodb::event::command::ConnectionInfo;
 use tokio::{task::JoinHandle, time};
 
+use super::resource_manager::{Resource, ResourceManager};
 use crate::{
-    connectors::base::DatabaseFetchResult,
+    connectors::base::{ConnectorInfo, DatabaseFetchResult, PaginationInfo},
+    log_error,
     managers::window_manager::WindowCommand,
-    ui::{
-        components::{base::Component, command::Message},
-        window::OnInputInfo,
-    },
+    ui::{components::command::Message, window::OnInputInfo},
 };
 
 pub enum ConnectionEvent {
-    Add(ConnectionInfo),
     Connect(String),
-    SwitchConnection(String, String),
+    SwitchConnection(ConnectorInfo),
     SwitchDatabase(String),
+}
+
+#[derive(Clone)]
+pub struct QueryEvent {
+    pub query: String,
+    pub pagination: PaginationInfo,
+}
+
+pub enum ResourceEvent {
+    Add(Box<dyn Resource>),
+    Update(Box<dyn Resource>),
 }
 
 pub enum Event {
     OnInput(OnInputInfo),
     OnMessage(Message),
     DatabaseData(DatabaseFetchResult),
-    OnQuery(String),
+    OnQuery(QueryEvent),
     OnWindowCommand(WindowCommand),
     OnConnection(ConnectionEvent),
     OnAsyncEvent(JoinHandle<()>),
+    OnResourceEvent(ResourceEvent),
     OnQuit(),
 }
 
@@ -48,6 +57,7 @@ pub enum EventType {
     OnMessage,
     AsyncEvent,
     OnQuit,
+    OnResourceEvent,
 }
 
 impl Event {
@@ -61,6 +71,7 @@ impl Event {
             Event::OnMessage(_) => EventType::OnMessage,
             Event::OnAsyncEvent(_) => EventType::AsyncEvent,
             Event::OnQuit() => EventType::OnQuit,
+            Event::OnResourceEvent(_) => EventType::OnResourceEvent,
         }
     }
 }
@@ -88,6 +99,7 @@ pub struct EventManager {
 
 pub trait EventHandler {
     fn on_event(&mut self, event: &Event) -> Result<()>;
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler;
 }
 
 impl EventManager {
@@ -97,14 +109,20 @@ impl EventManager {
         let async_events: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
 
         let cloned_async_events = async_events.clone();
+        let cloned_sender = sender.clone();
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_millis(100));
             loop {
                 interval.tick().await;
 
                 let event = cloned_async_events.lock().unwrap().pop();
+                let cloned_sender_2 = cloned_sender.clone();
                 if let Some(event) = event {
-                    event.await;
+                    tokio::spawn(async move {
+                        if let Err(e) = event.await {
+                            log_error!(cloned_sender_2, Some(e));
+                        }
+                    });
                 }
             }
         });
@@ -116,10 +134,24 @@ impl EventManager {
         }
     }
 
-    pub fn pool(&mut self, handlers: &mut Vec<Box<dyn Component>>) -> Result<bool> {
+    pub fn pool(
+        &mut self,
+        handlers: &mut [Box<&mut (impl EventHandler + ?Sized)>],
+        resource_manager: &mut ResourceManager,
+    ) -> Result<bool> {
         let mut should_quit = false;
+
         while let Ok(event) = self.receiver.try_recv() {
+            if let Event::OnResourceEvent(resource_event) = event {
+                resource_manager.on_event(resource_event)?;
+                continue;
+            }
+
             for handler in handlers.iter_mut() {
+                handler.on_event(&event)?
+            }
+
+            for handler in resource_manager.resources.iter_mut() {
                 handler.on_event(&event)?
             }
 
@@ -130,6 +162,36 @@ impl EventManager {
 
         Ok(should_quit)
     }
+
+    //pub fn pool_component(&mut self, handlers: &mut Vec<Box<dyn Component>>) -> Result<bool> {
+    //    let mut should_quit = false;
+    //    while let Ok(event) = self.receiver.try_recv() {
+    //        for handler in handlers.iter_mut() {
+    //            handler.on_event(&event)?
+    //        }
+
+    //        if let Event::OnQuit() = event {
+    //            should_quit = true;
+    //        }
+    //    }
+
+    //    Ok(should_quit)
+    //}
+
+    //pub fn pool_resource(&mut self, handlers: &mut Vec<Box<dyn Resource>>) -> Result<bool> {
+    //    let mut should_quit = false;
+    //    while let Ok(event) = self.receiver.try_recv() {
+    //        for handler in handlers.iter_mut() {
+    //            handler.on_event(&event)?
+    //        }
+
+    //        if let Event::OnQuit() = event {
+    //            should_quit = true;
+    //        }
+    //    }
+
+    //    Ok(should_quit)
+    //}
 
     pub fn trigger(&self, event: JoinHandle<()>) {
         self.async_events.lock().unwrap().push(event);

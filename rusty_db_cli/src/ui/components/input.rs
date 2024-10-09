@@ -20,6 +20,10 @@ impl InputComponent {
 }
 
 impl Component for InputComponent {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn set_visibility(&mut self, visible: bool) -> bool {
         self.info.visible = visible;
         visible
@@ -50,6 +54,9 @@ impl Component for InputComponent {
 }
 
 impl EventHandler for InputComponent {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
     fn on_event(&mut self, event: &Event) -> Result<()> {
         if let Event::OnInput(value) = event {
             if let Mode::Input = value.mode {

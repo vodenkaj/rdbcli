@@ -4,7 +4,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage};
 
-use crate::connectors::base::{Connector, ConnectorInfo, DatabaseData, Object, PaginationInfo};
+use crate::connectors::base::{
+    Connector, ConnectorInfo, DatabaseData, DatabaseKind, Object, PaginationInfo,
+};
 
 pub struct PostgresqlConnectorBuilder {
     info: Option<ConnectorInfo>,
@@ -23,6 +25,7 @@ impl PostgresqlConnectorBuilder {
                 uri: uri.to_string(),
                 host: "unknown".to_string(),
                 database: "unknown".to_string(),
+                kind: DatabaseKind::PostgresSQL,
             }),
         }
     }
@@ -64,7 +67,19 @@ impl Connector for PostgresqlConnector {
     }
 
     async fn get_data(&self, str: String, pagination: PaginationInfo) -> Result<DatabaseData> {
-        let query = format!("{} LIMIT {};", str.replace(';', ""), pagination.limit);
+        let first_query = str
+            .split(';')
+            .collect::<Vec<&str>>()
+            .first()
+            .cloned()
+            .unwrap_or_default();
+
+        let query = format!(
+            "{} LIMIT {} OFFSET {};",
+            first_query.replace(';', ""),
+            pagination.limit,
+            pagination.start
+        );
 
         let result_typed = self.client.query(&query, &[]).await?;
         let result_raw: Vec<tokio_postgres::SimpleQueryRow> = self
@@ -90,21 +105,21 @@ impl Connector for PostgresqlConnector {
         Ok(DatabaseData(result))
     }
 
-    async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
-        let config = Config::from_str(&uri)?;
+    //async fn set_connection(&mut self, uri: String) -> Result<ConnectorInfo> {
+    //    let config = Config::from_str(&uri)?;
 
-        let (client, connection) = config.connect(NoTls).await?;
+    //    let (client, connection) = config.connect(NoTls).await?;
 
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+    //    tokio::spawn(async move {
+    //        if let Err(e) = connection.await {
+    //            eprintln!("connection error: {}", e);
+    //        }
+    //    });
 
-        self.info.host = config.get_hostaddrs().first().unwrap().to_string();
-        self.info.database = config.get_dbname().unwrap().to_string();
-        self.client = client;
+    //    self.info.host = config.get_hostaddrs().first().unwrap().to_string();
+    //    self.info.database = config.get_dbname().unwrap().to_string();
+    //    self.client = client;
 
-        Ok(self.info.clone())
-    }
+    //    Ok(self.info.clone())
+    //}
 }
