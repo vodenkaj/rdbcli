@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 use clap::Parser;
 use once_cell::sync::Lazy;
@@ -14,12 +14,7 @@ use super::{
     window::{Window, WindowBuilder},
 };
 use crate::{
-    connectors::{
-        base::{Connector, TableData},
-        mongodb::connector::MongodbConnectorBuilder,
-        postgresql::connector::PostgresqlConnectorBuilder,
-    },
-    managers::event_manager::EventManager,
+    connectors::base::TableData, managers::event_manager::Event,
     widgets::scrollable_table::ScrollableTableState,
 };
 
@@ -41,37 +36,14 @@ pub struct CliArgs {
 
 pub static CLI_ARGS: Lazy<CliArgs> = Lazy::new(CliArgs::parse);
 
-pub async fn get_table_layout() -> Window {
-    let event_manager = EventManager::new();
-
-    let connector: Box<dyn Connector> = if CLI_ARGS.database_uri.contains("mongodb") {
-        Box::new(
-            MongodbConnectorBuilder::new(&CLI_ARGS.database_uri)
-                .build()
-                .await
-                .unwrap(),
-        )
-    } else if CLI_ARGS.database_uri.contains("postgresql") {
-        Box::new(
-            PostgresqlConnectorBuilder::new(&CLI_ARGS.database_uri)
-                .build()
-                .await
-                .unwrap(),
-        )
-    } else {
-        panic!("Other connectors are not implemented");
-    };
-
+pub fn get_table_layout(event_sender: Sender<Event>) -> Window {
     let status_line = StatusLineComponent::new(ComponentCreateInfo {
         focusable: true,
         visible: true,
         constraint: Constraint::Length(1),
-        data: StatusLineData {
-            host: connector.get_info().host.clone(),
-            database_name: connector.get_info().database.clone(),
-        },
+        data: StatusLineData::default(),
         id: 2,
-        event_sender: event_manager.sender.clone(),
+        event_sender: event_sender.clone(),
         is_focused: false,
     });
 
@@ -82,11 +54,10 @@ pub async fn get_table_layout() -> Window {
             focusable: true,
             id: 0,
             visible: true,
-            event_sender: event_manager.sender.clone(),
+            event_sender: event_sender.clone(),
             is_focused: true,
         },
         ScrollableTableState::default(),
-        Arc::new(tokio::sync::Mutex::new(connector)),
     );
 
     let command = CommandComponent::new(ComponentCreateInfo {
@@ -95,7 +66,7 @@ pub async fn get_table_layout() -> Window {
         constraint: Constraint::Length(1),
         data: Message::default(),
         id: 1,
-        event_sender: event_manager.sender.clone(),
+        event_sender: event_sender.clone(),
         is_focused: false,
     });
 
@@ -103,5 +74,5 @@ pub async fn get_table_layout() -> Window {
         .with_component(Box::new(table))
         .with_component(Box::new(status_line))
         .with_component(Box::new(command))
-        .build(event_manager)
+        .build()
 }

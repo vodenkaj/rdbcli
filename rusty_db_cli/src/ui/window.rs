@@ -15,12 +15,12 @@ use ratatui::{
 use super::components::base::{Component, ComponentDrawInfo};
 use crate::{
     application::Mode,
-    log_error,
     managers::event_manager::{Event, EventHandler, EventManager},
 };
 
-pub struct WindowRenderInfo {
+pub struct WindowRenderInfo<'a> {
     pub terminal: Arc<Mutex<Terminal<CrosstermBackend<Stdout>>>>,
+    pub event_manager: &'a mut EventManager,
     pub mode: Mode,
 }
 
@@ -30,6 +30,9 @@ pub struct WindowBuilder {
 }
 
 impl EventHandler for Window {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
     fn on_event(&mut self, event: &Event) -> Result<()> {
         if let Event::OnInput(value) = &event {
             match value.key.code {
@@ -59,14 +62,13 @@ impl WindowBuilder {
         self
     }
 
-    pub fn build(self, event_manager: EventManager) -> Window {
+    pub fn build(self) -> Window {
         if self.components.is_empty() {
             panic!("Cannot build window without any component");
         }
 
         Window {
             id: 0,
-            event_manager,
             components: self.components,
             focused_component_idx: 0,
             keybinds: self.keybinds,
@@ -77,8 +79,7 @@ impl WindowBuilder {
 
 pub struct Window {
     id: usize,
-    pub event_manager: EventManager,
-    components: Vec<Box<dyn Component>>,
+    pub components: Vec<Box<dyn Component>>,
     pub focused_component_idx: usize,
     keybinds: HashMap<event::KeyCode, Box<dyn Fn(&mut Self) + Send + Sync>>,
     pub should_quit: bool,
@@ -94,14 +95,14 @@ impl Window {
     }
 
     pub fn render(&mut self, info: WindowRenderInfo) {
-        match self.event_manager.pool(&mut self.components) {
-            Ok(should_quit) => {
-                self.should_quit = should_quit;
-            }
-            Err(err) => {
-                log_error!(self.event_manager.sender, Some(err))
-            }
-        }
+        //atch info.event_manager.pool(&mut self.components, &mut ) {
+        //    Ok(should_quit) => {
+        //        self.should_quit = should_quit;
+        //    }
+        //    Err(err) => {
+        //        log_error!(info.event_manager.sender.clone(), Some(err))
+        //    }
+        //}
 
         info.terminal
             .lock()
@@ -129,18 +130,6 @@ impl Window {
                 }
             })
             .unwrap();
-    }
-
-    pub fn on_key(&mut self, event: Event) {
-        self.event_manager.sender.send(event).unwrap();
-        match self.event_manager.pool(&mut self.components) {
-            Ok(should_quit) => {
-                self.should_quit = should_quit;
-            }
-            Err(err) => {
-                log_error!(self.event_manager.sender, Some(err))
-            }
-        }
     }
 }
 

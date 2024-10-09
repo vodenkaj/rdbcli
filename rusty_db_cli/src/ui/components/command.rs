@@ -162,6 +162,10 @@ impl CommandComponent {
 }
 
 impl Component for CommandComponent {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn get_constraint(&self) -> ratatui::prelude::Constraint {
         self.info.constraint
     }
@@ -257,6 +261,9 @@ impl CommandComponent {
 }
 
 impl EventHandler for CommandComponent {
+    fn as_mut_event_handler(&mut self) -> &mut dyn EventHandler {
+        self
+    }
     fn on_event(&mut self, event: &Event) -> Result<()> {
         match event {
             Event::OnMessage(value) => self.info.data = value.clone(),

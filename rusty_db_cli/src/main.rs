@@ -1,7 +1,6 @@
 use core::time;
 use std::{
     io::{self},
-    thread,
     time::Duration,
 };
 
@@ -12,11 +11,10 @@ use crossterm::{
 };
 use ratatui::{prelude::CrosstermBackend, Terminal};
 use rusty_db_cli::{
-    application::wait_for_app_initialization,
-    managers::window_manager::WindowManagerBuilder,
+    application::App,
+    managers::{event_manager::EventManager, window_manager::WindowManagerBuilder},
     ui::layouts::{get_table_layout, CLI_ARGS},
 };
-use tokio::task;
 
 #[tokio::main]
 async fn main() {
@@ -29,37 +27,39 @@ async fn main() {
     let mut term = Terminal::new(backend).unwrap();
     term.clear().unwrap();
 
-    let Some(app) = wait_for_app_initialization(
-        task::spawn(async {
-            WindowManagerBuilder::new()
-                .with_window(get_table_layout().await)
-                .build()
-        }),
+    let event_manager = EventManager::new();
+
+    let app = App::new(
         term,
-    )
-    .await
-    else {
-        return;
-    };
+        WindowManagerBuilder::new()
+            .with_window(get_table_layout(event_manager.sender.clone()))
+            .build(),
+        event_manager,
+    );
 
     loop {
-        let mut handle = app.lock().unwrap();
-        handle.render();
+        {
+            let mut handle = app.lock().await;
+            handle.render();
 
-        if event::poll(Duration::from_secs(0)).unwrap() {
-            if let Event::Key(key) = event::read().unwrap() {
-                handle.on_key(key);
+            if event::poll(Duration::from_secs(0)).unwrap() {
+                if let Event::Key(key) = event::read().unwrap() {
+                    handle.on_key(key);
+                }
+            }
+
+            handle.on_update();
+
+            if handle.should_exit {
+                break;
             }
         }
 
-        if handle.should_exit {
-            break;
-        }
-        thread::sleep(time::Duration::from_millis(10));
+        tokio::time::sleep(time::Duration::from_millis(10)).await;
     }
 
     disable_raw_mode().unwrap();
-    let app_guard = app.lock().unwrap();
+    let app_guard = app.lock().await;
     let mut term_guard = app_guard.terminal.lock().unwrap();
     execute!(
         term_guard.backend_mut(),
