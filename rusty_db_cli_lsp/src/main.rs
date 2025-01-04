@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs::{create_dir, File},
     io::{Read, Write},
@@ -16,8 +17,8 @@ use lsp_types::{
 };
 use rusty_db_cli_mongo::{
     interpreter::Interpreter, parser::ParseError, standard_library::StandardLibrary,
-    types::expressions::Node,
 };
+use rusty_db_cli_mongo_v2::parser::{get_located_span, hash_soft};
 
 fn main() {
     let (connection, _) = Connection::stdio();
@@ -113,11 +114,23 @@ impl Handler {
         }
 
         let content = self.cache.files.get(&file_uri).unwrap();
-        let (program, _) = Interpreter::new().tokenize(content.clone()).try_parse();
+        let errors = RefCell::new(Vec::new());
+        let input = get_located_span(content, &errors);
+        let res = hash_soft(input);
+        //let (program, _) = Interpreter::new().tokenize(content.clone()).try_parse();
 
-        let tree = program.get_tree();
-        let raw_type = tree.children.first().unwrap().name.clone();
-        let type_info = self.lib.get_type_info(&raw_type);
+        //let tree = program.get_tree();
+        //let last_child = {
+        //    let mut node = &tree;
+        //    while !node.children.is_empty() {
+        //        node = node.children.first().unwrap();
+        //    }
+        //    dbg!(&node.name, node.children.len());
+
+        //    node
+        //};
+        let raw_type = "db";
+        let type_info = self.lib.get_type_info(raw_type);
 
         let mut items: Vec<CompletionItem> = vec![];
 

@@ -1,0 +1,20 @@
+WHITESPACE = _{ " " | "\n" | "\t" }
+
+object = {
+  "{" ~ "}" |
+  "{" ~ (!"}" ~ ANY)+ ~ "}"
+}
+
+command_start = { "db" }
+
+dot = _{ "." }
+
+args = { "(" ~ ")" |
+         "(" ~ object ~ ("," ~ object)* ~ ")"
+       }
+
+command_name = { ASCII_ALPHANUMERIC+ }
+
+command = { dot ~ command_name ~ args }
+
+mongo = _{ SOI ~ command_start ~ dot ~ command_name ~ command+ ~ EOI }

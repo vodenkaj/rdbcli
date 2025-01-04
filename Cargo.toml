@@ -2,7 +2,7 @@
 members = [
     "rusty_db_cli",
     "rusty_db_cli_derive_internals", "rusty_db_cli_lsp",
-    "rusty_db_cli_mongo",
+    "rusty_db_cli_mongo", "rusty_db_cli_mongo_v2",
 ]
 
 # Config for 'cargo dist'

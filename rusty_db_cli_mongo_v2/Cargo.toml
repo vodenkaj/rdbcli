@@ -1,0 +1,15 @@
+[package]
+name = "rusty_db_cli_mongo_v2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[library]
+path = "src/main.rs"         # Path to your library's main source file
+crate-type = ["lib"]
+
+[dependencies]
+nom = "7.1.3"
+nom_locate = "4.2.0"
+pest = "2.7.15"
+pest_derive = "2.7.15"
